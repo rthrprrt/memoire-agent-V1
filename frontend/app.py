@@ -1,682 +1,1009 @@
-# app.py - Interface Streamlit
 import streamlit as st
 import requests
-import json
 import pandas as pd
-from datetime import datetime
-import websocket
-import threading
+import json
+from datetime import datetime, timedelta
+import os
 import time
+import tempfile
 
-# Configuration
+# Configuration de l'API
 API_URL = "http://backend:8000"
-WS_URL = "ws://backend:8000/ws"
 
-# Configuration de la page
+# Configuration de Streamlit
 st.set_page_config(
-    page_title="Assistant de Rédaction de Mémoire",
+    page_title="Agent Mémoire Alternance",
     page_icon="📝",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Fonctions utilitaires pour l'API
-def get_outline():
-    """Récupère la structure du plan du mémoire"""
-    try:
-        response = requests.get(f"{API_URL}/api/outline")
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        st.error(f"Erreur lors de la récupération du plan: {str(e)}")
-        return []
-
-def get_section(section_id):
-    """Récupère une section par son ID"""
-    try:
-        response = requests.get(f"{API_URL}/api/section/{section_id}")
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        st.error(f"Erreur lors de la récupération de la section: {str(e)}")
-        return None
-
-def update_section(section):
-    """Met à jour une section"""
-    try:
-        response = requests.put(f"{API_URL}/api/section/{section['id']}", json=section)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        st.error(f"Erreur lors de la mise à jour de la section: {str(e)}")
-        return None
-
-def generate_section_content(section_id, prompt=None):
-    """Génère du contenu pour une section"""
-    try:
-        payload = {"section_id": section_id}
-        if prompt:
-            payload["prompt"] = prompt
-        
-        response = requests.post(f"{API_URL}/api/section/{section_id}/generate", json=payload)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        st.error(f"Erreur lors de la génération du contenu: {str(e)}")
-        return None
-
-def improve_section(section_id, improvement_type):
-    """Améliore le contenu d'une section"""
-    try:
-        payload = {"improvement_type": improvement_type}
-        response = requests.post(f"{API_URL}/api/section/{section_id}/improve", json=payload)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        st.error(f"Erreur lors de l'amélioration du contenu: {str(e)}")
-        return None
-
-def get_journal_entries(limit=50, skip=0):
-    """Récupère les entrées du journal de bord"""
-    try:
-        response = requests.get(f"{API_URL}/api/journal?limit={limit}&skip={skip}")
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        st.error(f"Erreur lors de la récupération du journal: {str(e)}")
-        return []
-
-def add_journal_entry(entry):
-    """Ajoute une entrée au journal de bord"""
-    try:
-        response = requests.post(f"{API_URL}/api/journal", json=entry)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        st.error(f"Erreur lors de l'ajout de l'entrée au journal: {str(e)}")
-        return None
-
-def chat_with_assistant(message):
-    """Envoie un message à l'assistant"""
-    try:
-        payload = {
-            "content": message,
-            "relevant_journal": True,
-            "relevant_sections": True
-        }
-        response = requests.post(f"{API_URL}/api/chat", json=payload)
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        st.error(f"Erreur lors de la communication avec l'assistant: {str(e)}")
-        return {"response": "Désolé, je ne peux pas répondre pour le moment.", "context": {}}
-
-def create_initial_outline():
-    """Crée un plan initial pour le mémoire"""
-    try:
-        response = requests.post(f"{API_URL}/api/outline")
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        st.error(f"Erreur lors de la création du plan: {str(e)}")
-        return []
-
-# Fonction pour formater l'affichage du plan
-def display_outline(outline, level=0):
-    """Affiche le plan du mémoire de manière récursive"""
-    if not outline:
-        return
-    
-    for section in outline:
-        # Créer l'indentation selon le niveau
-        indent = "  " * level
-        prefix = "📄 " if level > 0 else "📑 "
-        
-        # Créer un bouton cliquable pour chaque section
-        if st.button(f"{indent}{prefix}{section['title']}", key=f"outline_btn_{section['id']}"):
-            st.session_state.selected_section_id = section['id']
-            st.session_state.active_tab = "editor"
-            st.experimental_rerun()
-        
-        # Afficher les enfants récursivement
-        if "children" in section and section["children"]:
-            display_outline(section["children"], level + 1)
-
-# CSS personnalisé
+# Styles CSS personnalisés
 st.markdown("""
 <style>
-    .main-header {
+    .main-title {
+        text-align: center;
         font-size: 2.5rem;
-        font-weight: bold;
         margin-bottom: 1rem;
-        color: #1E88E5;
     }
-    .section-header {
+    .section-title {
         font-size: 1.8rem;
-        font-weight: bold;
         margin-top: 1rem;
         margin-bottom: 0.5rem;
-        color: #0D47A1;
     }
-    .subsection-header {
-        font-size: 1.4rem;
-        font-weight: bold;
+    .subsection-title {
+        font-size: 1.5rem;
         margin-top: 0.8rem;
-        color: #1565C0;
+        margin-bottom: 0.4rem;
     }
-    .highlight-box {
-        padding: 1rem;
-        border-radius: 0.5rem;
-        background-color: #E3F2FD;
-        border-left: 5px solid #1E88E5;
-        margin-bottom: 1rem;
+    .card {
+        background-color: #f8f9fa;
+        border-radius: 10px;
+        padding: 15px;
+        margin-bottom: 10px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
     }
-    .chat-box {
-        max-height: 400px;
-        overflow-y: auto;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        background-color: #F5F5F5;
-        margin-bottom: 1rem;
+    .tag {
+        background-color: #6c757d;
+        color: white;
+        border-radius: 15px;
+        padding: 2px 8px;
+        margin-right: 5px;
+        font-size: 0.8rem;
     }
-    .user-message {
-        background-color: #E3F2FD;
-        padding: 0.5rem 1rem;
-        border-radius: 1rem 1rem 0 1rem;
-        margin-bottom: 0.5rem;
-        display: inline-block;
-        max-width: 80%;
-    }
-    .assistant-message {
-        background-color: #F1F8E9;
-        padding: 0.5rem 1rem;
-        border-radius: 1rem 1rem 1rem 0;
-        margin-bottom: 0.5rem;
-        display: inline-block;
-        max-width: 80%;
-    }
-    .journal-entry {
-        padding: 0.8rem;
-        border-radius: 0.3rem;
-        background-color: #FFF8E1;
-        border-left: 3px solid #FFA000;
-        margin-bottom: 0.8rem;
+    .entry-date {
+        color: #6c757d;
+        font-size: 0.9rem;
     }
     .progress-container {
-        margin-top: 1rem;
-        margin-bottom: 1rem;
+        margin-bottom: 20px;
     }
-    .version-box {
-        padding: 0.5rem;
-        border-radius: 0.3rem;
-        background-color: #E8EAF6;
-        border-left: 3px solid #3F51B5;
-        margin-bottom: 0.5rem;
-        font-size: 0.9rem;
+    .entry-container {
+        border-left: 3px solid #007bff;
+        padding-left: 15px;
+        margin-bottom: 20px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Initialisation de l'état de session
-if "active_tab" not in st.session_state:
-    st.session_state.active_tab = "dashboard"
-if "selected_section_id" not in st.session_state:
-    st.session_state.selected_section_id = None
-if "chat_messages" not in st.session_state:
-    st.session_state.chat_messages = []
-if "websocket" not in st.session_state:
-    st.session_state.websocket = None
-if "outline_exists" not in st.session_state:
-    # Vérifier si un plan existe déjà
-    outline = get_outline()
-    st.session_state.outline_exists = len(outline) > 0
+# Fonctions d'API
+def get_entreprises():
+    """Récupère la liste des entreprises depuis l'API"""
+    try:
+        response = requests.get(f"{API_URL}/entreprises")
+        response.raise_for_status()
+        return response.json()
+    except:
+        st.error("Erreur lors de la récupération des entreprises.")
+        return []
 
-# Barre de navigation latérale
-st.sidebar.markdown('<p class="main-header">📝 Assistant Mémoire</p>', unsafe_allow_html=True)
+def get_tags():
+    """Récupère la liste des tags depuis l'API"""
+    try:
+        response = requests.get(f"{API_URL}/tags")
+        response.raise_for_status()
+        return response.json()
+    except:
+        st.error("Erreur lors de la récupération des tags.")
+        return []
 
-# Menu de navigation
-menu = st.sidebar.radio(
-    "Navigation",
-    ["Tableau de bord", "Éditeur", "Journal de bord", "Chat avec l'assistant"],
-    key="menu",
-    index=["dashboard", "editor", "journal", "chat"].index(st.session_state.active_tab)
-        if st.session_state.active_tab in ["dashboard", "editor", "journal", "chat"] else 0
-)
-
-# Mettre à jour l'onglet actif en fonction du menu
-st.session_state.active_tab = {
-    "Tableau de bord": "dashboard",
-    "Éditeur": "editor",
-    "Journal de bord": "journal",
-    "Chat avec l'assistant": "chat"
-}[menu]
-
-# Section Plan du mémoire dans la barre latérale
-with st.sidebar.expander("Plan du mémoire", expanded=True):
-    outline = get_outline()
-    if outline:
-        # Afficher le plan
-        for section in outline:
-            if st.sidebar.button(f"📑 {section['title']}", key=f"sidebar_section_{section['id']}"):
-                st.session_state.selected_section_id = section['id']
-                st.session_state.active_tab = "editor"
-                st.experimental_rerun()
-            
-            # Afficher les sous-sections
-            if "children" in section and section["children"]:
-                for child in section["children"]:
-                    if st.sidebar.button(f"  ↳ {child['title']}", key=f"sidebar_child_{child['id']}"):
-                        st.session_state.selected_section_id = child['id']
-                        st.session_state.active_tab = "editor"
-                        st.experimental_rerun()
-    else:
-        st.sidebar.warning("Aucun plan disponible. Créez-en un depuis le tableau de bord.")
-
-# Contenu principal en fonction de l'onglet actif
-if st.session_state.active_tab == "dashboard":
-    st.markdown('<p class="main-header">Tableau de Bord</p>', unsafe_allow_html=True)
+def get_journal_entries(start_date=None, end_date=None, entreprise_id=None, type_entree=None, tag=None):
+    """Récupère les entrées du journal depuis l'API avec filtres optionnels"""
+    params = {}
+    if start_date:
+        params["start_date"] = start_date
+    if end_date:
+        params["end_date"] = end_date
+    if entreprise_id:
+        params["entreprise_id"] = entreprise_id
+    if type_entree:
+        params["type_entree"] = type_entree
+    if tag:
+        params["tag"] = tag
     
-    col1, col2 = st.columns(2)
+    try:
+        response = requests.get(f"{API_URL}/journal/entries", params=params)
+        response.raise_for_status()
+        return response.json()
+    except:
+        st.error("Erreur lors de la récupération des entrées du journal.")
+        return []
+
+def add_journal_entry(entry_data):
+    """Ajoute une entrée au journal via l'API"""
+    try:
+        response = requests.post(f"{API_URL}/journal/entries", json=entry_data)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        st.error(f"Erreur lors de l'ajout de l'entrée: {str(e)}")
+        return None
+
+def update_journal_entry(entry_id, entry_data):
+    """Met à jour une entrée du journal via l'API"""
+    try:
+        response = requests.put(f"{API_URL}/journal/entries/{entry_id}", json=entry_data)
+        response.raise_for_status()
+        return response.json()
+    except:
+        st.error("Erreur lors de la mise à jour de l'entrée.")
+        return None
+
+def delete_journal_entry(entry_id):
+    """Supprime une entrée du journal via l'API"""
+    try:
+        response = requests.delete(f"{API_URL}/journal/entries/{entry_id}")
+        response.raise_for_status()
+        return True
+    except:
+        st.error("Erreur lors de la suppression de l'entrée.")
+        return False
+
+def get_memoire_sections(parent_id=None):
+    """Récupère les sections du mémoire depuis l'API"""
+    params = {}
+    if parent_id is not None:
+        params["parent_id"] = parent_id
     
+    try:
+        response = requests.get(f"{API_URL}/memoire/sections", params=params)
+        response.raise_for_status()
+        return response.json()
+    except:
+        st.error("Erreur lors de la récupération des sections du mémoire.")
+        return []
+
+def get_memoire_section(section_id):
+    """Récupère une section spécifique du mémoire depuis l'API"""
+    try:
+        response = requests.get(f"{API_URL}/memoire/sections/{section_id}")
+        response.raise_for_status()
+        return response.json()
+    except:
+        st.error("Erreur lors de la récupération de la section.")
+        return None
+
+def add_memoire_section(section_data):
+    """Ajoute une section au mémoire via l'API"""
+    try:
+        response = requests.post(f"{API_URL}/memoire/sections", json=section_data)
+        response.raise_for_status()
+        return response.json()
+    except:
+        st.error("Erreur lors de l'ajout de la section.")
+        return None
+
+def update_memoire_section(section_id, section_data):
+    """Met à jour une section du mémoire via l'API"""
+    try:
+        response = requests.put(f"{API_URL}/memoire/sections/{section_id}", json=section_data)
+        response.raise_for_status()
+        return response.json()
+    except:
+        st.error("Erreur lors de la mise à jour de la section.")
+        return None
+
+def delete_memoire_section(section_id):
+    """Supprime une section du mémoire via l'API"""
+    try:
+        response = requests.delete(f"{API_URL}/memoire/sections/{section_id}")
+        response.raise_for_status()
+        return True
+    except:
+        st.error("Erreur lors de la suppression de la section.")
+        return False
+
+def generate_plan(prompt):
+    """Génère un plan de mémoire via l'API IA"""
+    try:
+        response = requests.post(f"{API_URL}/ai/generate-plan", json={"prompt": prompt})
+        response.raise_for_status()
+        return response.json()
+    except:
+        st.error("Erreur lors de la génération du plan.")
+        return None
+
+def generate_content(section_id, prompt=None):
+    """Génère du contenu pour une section du mémoire via l'API IA"""
+    data = {"section_id": section_id}
+    if prompt:
+        data["prompt"] = prompt
+    
+    try:
+        response = requests.post(f"{API_URL}/ai/generate-content", json=data)
+        response.raise_for_status()
+        return response.json()
+    except:
+        st.error("Erreur lors de la génération du contenu.")
+        return None
+
+def improve_text(texte, mode):
+    """Améliore un texte via l'API IA"""
+    try:
+        response = requests.post(f"{API_URL}/ai/improve-text", json={"texte": texte, "mode": mode})
+        response.raise_for_status()
+        return response.json()
+    except:
+        st.error("Erreur lors de l'amélioration du texte.")
+        return None
+
+def search_entries(query):
+    """Recherche des entrées de journal via l'API"""
+    try:
+        response = requests.get(f"{API_URL}/search", params={"query": query})
+        response.raise_for_status()
+        return response.json()
+    except:
+        st.error("Erreur lors de la recherche.")
+        return []
+
+# Fonctions pour l'import de PDF
+def process_pdf(uploaded_file, entreprise_id, type_entree):
+    """Traite un fichier PDF importé et extrait les entrées de journal"""
+    try:
+        # Enregistrer temporairement le fichier
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+            tmp_file.write(uploaded_file.getvalue())
+            pdf_path = tmp_file.name
+        
+        # Ici, vous devriez utiliser une bibliothèque comme PyPDF2 ou pdfminer
+        # pour extraire le texte du PDF. Pour l'exemple, nous utilisons une
+        # extraction simulée.
+        
+        # Extraction simulée - à remplacer par une extraction réelle
+        content = "Contenu extrait du PDF: " + uploaded_file.name
+        
+        # Créer une entrée de journal
+        today = datetime.now().strftime("%Y-%m-%d")
+        entry_data = {
+            "date": today,
+            "texte": content,
+            "entreprise_id": entreprise_id,
+            "type_entree": type_entree,
+            "source_document": uploaded_file.name
+        }
+        
+        # Ajouter l'entrée via l'API
+        result = add_journal_entry(entry_data)
+        
+        # Nettoyer le fichier temporaire
+        os.unlink(pdf_path)
+        
+        return result
+    except Exception as e:
+        st.error(f"Erreur lors du traitement du PDF: {str(e)}")
+        return None
+
+# Sidebar - Authentification et Navigation
+with st.sidebar:
+    st.title("Agent Mémoire")
+    
+    # Menu de navigation
+    st.subheader("Navigation")
+    page = st.radio("", ["Tableau de bord", "Journal de bord", "Éditeur de mémoire", "Chat assistant", "Import PDF"])
+
+# Pages
+if page == "Tableau de bord":
+    st.markdown("<h1 class='main-title'>Tableau de bord</h1>", unsafe_allow_html=True)
+    
+    # Statistiques générales
+    col1, col2, col3 = st.columns(3)
+    
+    # Nombre d'entrées de journal
+    entries = get_journal_entries()
     with col1:
-        st.markdown('<p class="section-header">Plan du mémoire</p>', unsafe_allow_html=True)
-        
-        if not st.session_state.outline_exists:
-            st.info("Aucun plan n'a été créé pour le moment.")
-            if st.button("Générer un plan initial", key="generate_initial_outline"):
-                with st.spinner("Génération du plan en cours..."):
-                    outline = create_initial_outline()
-                    if outline:
-                        st.session_state.outline_exists = True
-                        st.success("Plan généré avec succès!")
-                        st.experimental_rerun()
-        else:
-            # Afficher le plan actuel
-            if outline:
-                for section in outline:
-                    st.markdown(f"**{section['title']}**")
-                    
-                    # Afficher les sous-sections
-                    if "children" in section and section["children"]:
-                        for child in section["children"]:
-                            st.markdown(f"  • {child['title']}")
-            
-            if st.button("Régénérer le plan", key="regenerate_outline"):
-                if st.checkbox("Je confirme vouloir régénérer le plan (cette action ne peut pas être annulée)"):
-                    with st.spinner("Régénération du plan en cours..."):
-                        outline = create_initial_outline()
-                        if outline:
-                            st.success("Plan régénéré avec succès!")
-                            st.experimental_rerun()
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.subheader("Entrées de journal")
+        st.metric("Total", len(entries))
+        st.markdown("</div>", unsafe_allow_html=True)
     
+    # Nombre de sections du mémoire
+    sections = get_memoire_sections()
     with col2:
-        st.markdown('<p class="section-header">Journal de bord</p>', unsafe_allow_html=True)
-        
-        # Afficher les dernières entrées du journal
-        journal_entries = get_journal_entries(limit=5)
-        
-        if journal_entries:
-            for entry in journal_entries:
-                with st.expander(f"{entry['date']} - {entry['tags'][0] if entry['tags'] else 'Sans tag'}"):
-                    st.markdown(entry['content'][:200] + "..." if len(entry['content']) > 200 else entry['content'])
-        else:
-            st.info("Aucune entrée de journal trouvée. Ajoutez-en depuis l'onglet Journal de bord.")
-        
-        # Raccourci pour ajouter une entrée
-        if st.button("Ajouter une entrée au journal", key="dashboard_add_journal"):
-            st.session_state.active_tab = "journal"
-            st.experimental_rerun()
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.subheader("Sections du mémoire")
+        st.metric("Total", len(sections))
+        st.markdown("</div>", unsafe_allow_html=True)
     
-    # Statistiques de progression
-    st.markdown('<p class="section-header">Progression du mémoire</p>', unsafe_allow_html=True)
-    
-    # Calculer les statistiques
-    if outline:
-        total_sections = 0
-        sections_with_content = 0
-        total_words = 0
+    # Avancement global
+    with col3:
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.subheader("Avancement global")
         
-        # Fonction récursive pour compter les sections
-        def count_sections(sections, ts=0, swc=0, tw=0):
-            for section in sections:
-                ts += 1
-                
-                # Vérifier si la section a du contenu
-                section_data = get_section(section["id"])
-                if section_data and section_data["content"] and len(section_data["content"]) > 50:  # Minimum 50 caractères
-                    swc += 1
-                    tw += len(section_data["content"].split())
-                
-                # Traiter les enfants
-                if "children" in section and section["children"]:
-                    new_ts, new_swc, new_tw = count_sections(section["children"], 0, 0, 0)
-                    ts += new_ts
-                    swc += new_swc
-                    tw += new_tw
-                    
-            return ts, swc, tw
+        # Calculer l'avancement (sections avec contenu / total sections)
+        sections_with_content = sum(1 for s in sections if s.get("contenu"))
+        progress = sections_with_content / max(len(sections), 1) * 100
+        
+        st.progress(progress / 100)
+        st.metric("Pourcentage", f"{progress:.1f}%")
+        st.markdown("</div>", unsafe_allow_html=True)
+    
+    # Entrées récentes
+    st.markdown("<h2 class='section-title'>Entrées récentes</h2>", unsafe_allow_html=True)
+    
+    recent_entries = entries[:5]  # Prendre les 5 entrées les plus récentes
+    
+    for entry in recent_entries:
+        st.markdown("<div class='entry-container'>", unsafe_allow_html=True)
+        st.markdown(f"<p class='entry-date'>{entry['date']}</p>", unsafe_allow_html=True)
+        
+        # Afficher les tags
+        tags_html = ""
+        for tag in entry.get("tags", []):
+            tags_html += f"<span class='tag'>{tag}</span>"
+        
+        st.markdown(tags_html, unsafe_allow_html=True)
+        
+        # Afficher un extrait du texte
+        text_preview = entry["texte"][:200] + "..." if len(entry["texte"]) > 200 else entry["texte"]
+        st.write(text_preview)
+        st.markdown("</div>", unsafe_allow_html=True)
+    
+    # Tags les plus utilisés
+    st.markdown("<h2 class='section-title'>Tags populaires</h2>", unsafe_allow_html=True)
+    
+    tags = get_tags()
+    if tags:
+        # Créer un dataframe pour afficher les tags
+        df_tags = pd.DataFrame({
+            "Tag": [tag["nom"] for tag in tags],
+            "Nombre d'entrées": [tag["count"] for tag in tags]
+        })
+        
+        # Afficher un graphique
+        st.bar_chart(df_tags.set_index("Tag"))
 
-        # Puis appeler la fonction et récupérer les résultats
-        total_sections, sections_with_content, total_words = count_sections(outline)
+elif page == "Journal de bord":
+    st.markdown("<h1 class='main-title'>Journal de bord</h1>", unsafe_allow_html=True)
+    
+    # Onglets
+    tab1, tab2, tab3 = st.tabs(["Ajouter une entrée", "Consulter les entrées", "Recherche"])
+    
+    # Onglet Ajouter une entrée
+    with tab1:
+        st.markdown("<h2 class='section-title'>Nouvelle entrée</h2>", unsafe_allow_html=True)
         
-        # Calculer les statistiques
-        count_sections(outline)
+        # Entreprises
+        entreprises = get_entreprises()
+        entreprise_options = {e["nom"]: e["id"] for e in entreprises}
         
-        # Afficher les statistiques
+        # Formulaire
+        with st.form("journal_entry_form"):
+            date = st.date_input("Date", datetime.now())
+            
+            # Déterminer l'entreprise par défaut en fonction de la date
+            default_entreprise = None
+            for e in entreprises:
+                start_date = datetime.strptime(e["date_debut"], "%Y-%m-%d").date()
+                end_date = datetime.strptime(e["date_fin"], "%Y-%m-%d").date() if e["date_fin"] else None
+                
+                if start_date <= date and (end_date is None or date <= end_date):
+                    default_entreprise = e["nom"]
+                    break
+            
+            entreprise = st.selectbox("Entreprise", list(entreprise_options.keys()), index=list(entreprise_options.keys()).index(default_entreprise) if default_entreprise else 0)
+            
+            type_entree = st.selectbox("Type d'entrée", ["quotidien", "projet", "formation", "réflexion"])
+            
+            texte = st.text_area("Contenu", height=300)
+            
+            # Tags existants
+            all_tags = get_tags()
+            existing_tags = [tag["nom"] for tag in all_tags]
+            
+            # Option pour des tags existants ou nouveaux
+            use_existing_tags = st.checkbox("Utiliser des tags existants")
+            
+            if use_existing_tags and existing_tags:
+                selected_tags = st.multiselect("Tags", existing_tags)
+            else:
+                tags_input = st.text_input("Tags (séparés par des virgules)")
+                selected_tags = [tag.strip() for tag in tags_input.split(",")] if tags_input else []
+            
+            submitted = st.form_submit_button("Enregistrer")
+            
+            if submitted:
+                if not texte:
+                    st.error("Le contenu ne peut pas être vide.")
+                else:
+                    # Préparer les données
+                    entry_data = {
+                        "date": date.strftime("%Y-%m-%d"),
+                        "texte": texte,
+                        "entreprise_id": entreprise_options[entreprise],
+                        "type_entree": type_entree,
+                        "tags": selected_tags if selected_tags and selected_tags[0] else None
+                    }
+                    
+                    # Ajouter l'entrée
+                    result = add_journal_entry(entry_data)
+                    
+                    if result:
+                        st.success("Entrée ajoutée avec succès!")
+                        # Proposer d'extraire automatiquement des tags
+                        if not selected_tags:
+                            auto_tags = result.get("tags", [])
+                            if auto_tags:
+                                st.info(f"Tags extraits automatiquement: {', '.join(auto_tags)}")
+    
+    # Onglet Consulter les entrées
+    with tab2:
+        st.markdown("<h2 class='section-title'>Entrées du journal</h2>", unsafe_allow_html=True)
+        
+        # Filtres
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            st.metric("Sections complétées", f"{sections_with_content}/{total_sections}", 
-                     f"{int(sections_with_content/total_sections*100)}%" if total_sections > 0 else "0%")
+            filter_start_date = st.date_input("Date de début", datetime.now() - timedelta(days=30))
         
         with col2:
-            st.metric("Mots rédigés", f"{total_words}", 
-                     "sur ~10000 requis" if total_words < 10000 else "✓ Minimum atteint")
+            filter_end_date = st.date_input("Date de fin", datetime.now())
+        
+        entreprises = get_entreprises()
+        entreprise_options = {e["nom"]: e["id"] for e in entreprises}
+        entreprise_options["Toutes"] = None
         
         with col3:
-            # Estimer le temps restant
-            if total_sections > sections_with_content:
-                remaining_sections = total_sections - sections_with_content
-                st.metric("Temps estimé restant", f"{remaining_sections} jours", 
-                         "à raison d'une section par jour")
-            else:
-                st.metric("Temps estimé restant", "0 jours", "Toutes les sections ont du contenu")
+            filter_entreprise = st.selectbox("Entreprise", list(entreprise_options.keys()))
         
-        # Barre de progression
-        progress = sections_with_content / total_sections if total_sections > 0 else 0
-        st.progress(progress)
-        st.markdown(f"**Progression globale:** {int(progress*100)}%")
-    else:
-        st.info("Générez d'abord un plan pour voir les statistiques de progression.")
-    
-    # Suggestions
-    st.markdown('<p class="section-header">Suggestions</p>', unsafe_allow_html=True)
-    
-    if outline:
-        # Trouver la prochaine section à rédiger
-        next_section = None
+        col1, col2 = st.columns(2)
         
-        def find_next_empty_section(sections):
-            for section in sections:
-                section_data = get_section(section["id"])
-                if section_data and (not section_data["content"] or len(section_data["content"]) < 50):
-                    return section
+        with col1:
+            filter_type = st.selectbox("Type d'entrée", ["Tous", "quotidien", "projet", "formation", "réflexion"])
+        
+        all_tags = get_tags()
+        tag_options = ["Tous"] + [tag["nom"] for tag in all_tags]
+        
+        with col2:
+            filter_tag = st.selectbox("Tag", tag_options)
+        
+        # Récupérer les entrées filtrées
+        entries = get_journal_entries(
+            start_date=filter_start_date.strftime("%Y-%m-%d"),
+            end_date=filter_end_date.strftime("%Y-%m-%d"),
+            entreprise_id=entreprise_options[filter_entreprise],
+            type_entree=None if filter_type == "Tous" else filter_type,
+            tag=None if filter_tag == "Tous" else filter_tag
+        )
+        
+        # Afficher les entrées
+        for entry in entries:
+            with st.expander(f"{entry['date']} - {entry.get('entreprise_nom', 'Entreprise inconnue')}"):
+                # Afficher les tags
+                tags_html = ""
+                for tag in entry.get("tags", []):
+                    tags_html += f"<span class='tag'>{tag}</span>"
                 
-                # Vérifier les enfants
-                if "children" in section and section["children"]:
-                    child_result = find_next_empty_section(section["children"])
-                    if child_result:
-                        return child_result
-            
-            return None
-        
-        next_section = find_next_empty_section(outline)
-        
-        if next_section:
-            st.markdown('<div class="highlight-box">', unsafe_allow_html=True)
-            st.markdown(f"**Suggestion:** Rédiger la section **{next_section['title']}**")
-            if st.button("Travailler sur cette section", key="work_on_suggested_section"):
-                st.session_state.selected_section_id = next_section["id"]
-                st.session_state.active_tab = "editor"
-                st.experimental_rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
-        else:
-            st.success("Toutes les sections ont du contenu! Vous pouvez maintenant les améliorer.")
-
-elif st.session_state.active_tab == "editor":
-    st.markdown('<p class="main-header">Éditeur de Mémoire</p>', unsafe_allow_html=True)
-    
-    if not st.session_state.selected_section_id:
-        st.info("Veuillez sélectionner une section à éditer depuis le plan du mémoire.")
-    else:
-        # Récupérer les informations de la section
-        section = get_section(st.session_state.selected_section_id)
-        
-        if section:
-            # Entête avec titre de la section
-            st.markdown(f'<p class="section-header">{section["title"]}</p>', unsafe_allow_html=True)
-            
-            # Afficher le contenu actuel dans un éditeur de texte
-            new_content = st.text_area(
-                "Contenu de la section",
-                value=section["content"],
-                height=400,
-                key="section_content_editor"
-            )
-            
-            # Fonctionnalités d'édition
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                # Bouton de sauvegarde
-                if st.button("Sauvegarder les modifications", key="save_section"):
-                    if new_content != section["content"]:
-                        section["content"] = new_content
-                        section["last_modified"] = datetime.now().isoformat()
-                        updated_section = update_section(section)
-                        if updated_section:
-                            st.success("Section mise à jour avec succès!")
-                            # Mettre à jour la section dans l'état
-                            section = updated_section
-            
-            with col2:
-                # Génération de contenu
-                if st.button("Générer du contenu", key="generate_content"):
-                    prompt = st.text_input("Instructions spécifiques (facultatif)", key="generation_prompt")
-                    if st.button("Confirmer la génération", key="confirm_generation"):
-                        with st.spinner("Génération du contenu en cours..."):
-                            updated_section = generate_section_content(section["id"], prompt)
-                            if updated_section:
-                                st.success("Contenu généré avec succès!")
-                                # Mettre à jour la section dans l'état et dans l'éditeur
-                                section = updated_section
-                                st.experimental_rerun()
-            
-            # Outils d'amélioration
-            st.markdown('<p class="subsection-header">Outils d\'amélioration</p>', unsafe_allow_html=True)
-            
-            improvement_type = st.selectbox(
-                "Type d'amélioration",
-                options=["style", "grammar", "structure", "depth", "concision"],
-                format_func=lambda x: {
-                    "style": "Améliorer le style d'écriture",
-                    "grammar": "Corriger la grammaire et l'orthographe",
-                    "structure": "Améliorer la structure et l'organisation",
-                    "depth": "Approfondir l'analyse",
-                    "concision": "Rendre le texte plus concis"
-                }[x],
-                key="improvement_type"
-            )
-            
-            if st.button("Appliquer l'amélioration", key="apply_improvement"):
-                with st.spinner(f"Amélioration du texte en cours ({improvement_type})..."):
-                    updated_section = improve_section(section["id"], improvement_type)
-                    if updated_section:
-                        st.success("Texte amélioré avec succès!")
-                        # Mettre à jour la section dans l'état
-                        section = updated_section
+                st.markdown(tags_html, unsafe_allow_html=True)
+                
+                # Type d'entrée
+                st.write(f"Type: {entry['type_entree']}")
+                
+                # Contenu
+                st.write(entry["texte"])
+                
+                # Actions
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if st.button(f"Modifier #{entry['id']}", key=f"edit_{entry['id']}"):
+                        st.session_state["edit_entry"] = entry
                         st.experimental_rerun()
-            
-            # Entrées de journal pertinentes
-            st.markdown('<p class="subsection-header">Entrées de journal pertinentes</p>', unsafe_allow_html=True)
-            
-            # Rechercher des entrées pertinentes
-            journal_entries = get_journal_entries(limit=100)
-            
-            # Filtrer les entrées pertinentes (simulation - dans un cas réel, utilisez l'API)
-            # Recherche simple basée sur les mots-clés du titre
-            keywords = section["title"].lower().split()
-            relevant_entries = []
-            
-            for entry in journal_entries:
-                relevance_score = 0
-                content_lower = entry["content"].lower()
                 
-                for keyword in keywords:
-                    if keyword in content_lower and len(keyword) > 3:  # Ignorer les mots courts
-                        relevance_score += 1
-                
-                if relevance_score > 0:
-                    relevant_entries.append({
-                        **entry,
-                        "relevance_score": relevance_score
-                    })
-            
-            # Trier par pertinence
-            relevant_entries.sort(key=lambda x: x["relevance_score"], reverse=True)
-            
-            if relevant_entries:
-                for entry in relevant_entries[:3]:  # Afficher les 3 plus pertinentes
-                    with st.expander(f"{entry['date']} - Score: {entry['relevance_score']}"):
-                        st.markdown(f"**Tags:** {', '.join(entry['tags']) if entry['tags'] else 'Aucun tag'}")
-                        st.markdown(entry["content"])
-                        
-                        # Bouton pour insérer le contenu
-                        if st.button("Utiliser cette entrée", key=f"use_entry_{entry['id']}"):
-                            # Ajouter le contenu à la fin de la section
-                            new_content = section["content"] + "\n\n" + entry["content"]
-                            section["content"] = new_content
-                            updated_section = update_section(section)
-                            if updated_section:
-                                st.success("Contenu de l'entrée ajouté à la section!")
-                                section = updated_section
-                                st.experimental_rerun()
-            else:
-                st.info("Aucune entrée de journal pertinente trouvée.")
-
-elif st.session_state.active_tab == "journal":
-    st.markdown('<p class="main-header">Journal de Bord</p>', unsafe_allow_html=True)
-    
-    # Interface pour ajouter une nouvelle entrée
-    with st.expander("Ajouter une nouvelle entrée", expanded=True):
-        date = st.date_input("Date", value=datetime.now().date())
-        tags = st.multiselect("Tags", options=["Réunion", "Développement", "Formation", "Projet", "Autre"])
-        content = st.text_area("Contenu de l'entrée", height=200)
-        
-        if st.button("Ajouter l'entrée", key="add_journal_entry"):
-            if content:
-                # Formater l'entrée
-                entry = {
-                    "date": date.isoformat(),
-                    "content": content,
-                    "tags": tags
-                }
-                
-                # Ajouter l'entrée
-                result = add_journal_entry(entry)
-                if result:
-                    st.success("Entrée ajoutée avec succès!")
-                    st.experimental_rerun()
-            else:
-                st.error("Le contenu de l'entrée ne peut pas être vide.")
-    
-    # Afficher les entrées existantes
-    st.markdown('<p class="section-header">Entrées existantes</p>', unsafe_allow_html=True)
-    
-    # Options de filtrage
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        filter_tag = st.multiselect("Filtrer par tag", options=["Réunion", "Développement", "Formation", "Projet", "Autre"])
-    
-    with col2:
-        sort_order = st.radio("Ordre de tri", options=["Plus récent d'abord", "Plus ancien d'abord"])
-    
-    # Récupérer les entrées
-    journal_entries = get_journal_entries(limit=100)
-    
-    # Appliquer le filtrage
-    if filter_tag:
-        journal_entries = [entry for entry in journal_entries if any(tag in entry["tags"] for tag in filter_tag)]
-    
-    # Appliquer le tri
-    if sort_order == "Plus ancien d'abord":
-        journal_entries.sort(key=lambda x: x["date"])
-    else:
-        journal_entries.sort(key=lambda x: x["date"], reverse=True)
-    
-    # Afficher les entrées
-    if journal_entries:
-        for entry in journal_entries:
-            with st.expander(f"{entry['date']} - {', '.join(entry['tags']) if entry['tags'] else 'Sans tag'}"):
-                st.markdown(entry["content"])
-                
-                # Options pour utiliser cette entrée
-                if st.button("Utiliser dans le mémoire", key=f"use_in_memoir_{entry['id']}"):
-                    # Afficher les sections disponibles
-                    outline = get_outline()
-                    
-                    if outline:
-                        st.selectbox(
-                            "Sélectionner une section",
-                            options=[section["id"] for section in outline],
-                            format_func=lambda x: next((s["title"] for s in outline if s["id"] == x), x),
-                            key=f"section_select_{entry['id']}"
-                        )
-                        
-                        if st.button("Confirmer", key=f"confirm_use_{entry['id']}"):
-                            selected_section_id = st.session_state[f"section_select_{entry['id']}"]
-                            st.session_state.selected_section_id = selected_section_id
-                            st.session_state.active_tab = "editor"
+                with col2:
+                    if st.button(f"Supprimer #{entry['id']}", key=f"delete_{entry['id']}"):
+                        if delete_journal_entry(entry["id"]):
+                            st.success("Entrée supprimée avec succès!")
                             st.experimental_rerun()
-    else:
-        st.info("Aucune entrée de journal trouvée.")
+        
+        # Formulaire de modification
+        if "edit_entry" in st.session_state:
+            entry = st.session_state["edit_entry"]
+            
+            st.markdown("<h3 class='subsection-title'>Modifier l'entrée</h3>", unsafe_allow_html=True)
+            
+            with st.form("edit_journal_entry_form"):
+                edit_date = st.date_input("Date", datetime.strptime(entry["date"], "%Y-%m-%d"))
+                
+                # Entreprises
+                entreprises = get_entreprises()
+                entreprise_options = {e["nom"]: e["id"] for e in entreprises}
+                default_entreprise_index = 0
+                
+                for i, (name, id) in enumerate(entreprise_options.items()):
+                    if id == entry["entreprise_id"]:
+                        default_entreprise_index = i
+                        break
+                
+                edit_entreprise = st.selectbox("Entreprise", list(entreprise_options.keys()), index=default_entreprise_index)
+                
+                edit_type_entree = st.selectbox("Type d'entrée", ["quotidien", "projet", "formation", "réflexion"], index=["quotidien", "projet", "formation", "réflexion"].index(entry["type_entree"]))
+                
+                edit_texte = st.text_area("Contenu", entry["texte"], height=300)
+                
+                # Tags existants
+                all_tags = get_tags()
+                existing_tags = [tag["nom"] for tag in all_tags]
+                
+                # Option pour des tags existants ou nouveaux
+                use_existing_tags = st.checkbox("Utiliser des tags existants", value=True)
+                
+                if use_existing_tags and existing_tags:
+                    edit_selected_tags = st.multiselect("Tags", existing_tags, default=entry.get("tags", []))
+                else:
+                    tags_input = st.text_input("Tags (séparés par des virgules)", ", ".join(entry.get("tags", [])))
+                    edit_selected_tags = [tag.strip() for tag in tags_input.split(",")] if tags_input else []
+                
+                submit_edit = st.form_submit_button("Enregistrer les modifications")
+                
+                if submit_edit:
+                    if not edit_texte:
+                        st.error("Le contenu ne peut pas être vide.")
+                    else:
+                        # Préparer les données
+                        update_data = {
+                            "date": edit_date.strftime("%Y-%m-%d"),
+                            "texte": edit_texte,
+                            "entreprise_id": entreprise_options[edit_entreprise],
+                            "type_entree": edit_type_entree,
+                            "tags": edit_selected_tags if edit_selected_tags and edit_selected_tags[0] else None
+                        }
+                        
+                        # Mettre à jour l'entrée
+                        result = update_journal_entry(entry["id"], update_data)
+                        
+                        if result:
+                            st.success("Entrée mise à jour avec succès!")
+                            # Supprimer l'entrée de la session state
+                            del st.session_state["edit_entry"]
+                            st.experimental_rerun()
+            
+            # Bouton pour annuler la modification
+            if st.button("Annuler"):
+                del st.session_state["edit_entry"]
+                st.experimental_rerun()
+    
+    # Onglet Recherche
+    with tab3:
+        st.markdown("<h2 class='section-title'>Recherche</h2>", unsafe_allow_html=True)
+        
+        search_query = st.text_input("Rechercher dans le journal", "")
+        
+        if search_query:
+            results = search_entries(search_query)
+            
+            st.markdown(f"<p>{len(results)} résultats trouvés</p>", unsafe_allow_html=True)
+            
+            for result in results:
+                similarity = result.get("similarity", 0)
+                similarity_percentage = f"{(1 - similarity) * 100:.1f}%" if similarity is not None else "N/A"
+                
+                st.markdown(f"<div class='entry-container'>", unsafe_allow_html=True)
+                st.markdown(f"<p class='entry-date'>{result['date']} - Pertinence: {similarity_percentage}</p>", unsafe_allow_html=True)
+                
+                # Afficher les tags
+                tags_html = ""
+                for tag in result.get("tags", []):
+                    tags_html += f"<span class='tag'>{tag}</span>"
+                
+                st.markdown(tags_html, unsafe_allow_html=True)
+                
+                # Afficher un extrait du texte
+                text_preview = result["texte"][:200] + "..." if len(result["texte"]) > 200 else result["texte"]
+                st.write(text_preview)
+                
+                # Lien vers l'entrée complète
+                if st.button(f"Voir l'entrée complète #{result['id']}", key=f"view_{result['id']}"):
+                    st.session_state["view_entry"] = result["id"]
+                    st.experimental_rerun()
+                
+                st.markdown("</div>", unsafe_allow_html=True)
+        
+        # Afficher l'entrée complète
+        if "view_entry" in st.session_state:
+            entry_id = st.session_state["view_entry"]
+            
+            # Récupérer l'entrée
+            response = requests.get(f"{API_URL}/journal/entries/{entry_id}")
+            if response.status_code == 200:
+                entry = response.json()
+                
+                st.markdown("<h3 class='subsection-title'>Entrée complète</h3>", unsafe_allow_html=True)
+                
+                st.markdown(f"<p class='entry-date'>{entry['date']} - {entry.get('entreprise_nom', 'Entreprise inconnue')}</p>", unsafe_allow_html=True)
+                
+                # Afficher les tags
+                tags_html = ""
+                for tag in entry.get("tags", []):
+                    tags_html += f"<span class='tag'>{tag}</span>"
+                
+                st.markdown(tags_html, unsafe_allow_html=True)
+                
+                # Type d'entrée
+                st.write(f"Type: {entry['type_entree']}")
+                
+                # Contenu
+                st.write(entry["texte"])
+                
+                # Bouton pour fermer
+                if st.button("Fermer"):
+                    del st.session_state["view_entry"]
+                    st.experimental_rerun()
 
-elif st.session_state.active_tab == "chat":
-    st.markdown('<p class="main-header">Chat avec l\'Assistant</p>', unsafe_allow_html=True)
+elif page == "Éditeur de mémoire":
+    st.markdown("<h1 class='main-title'>Éditeur de mémoire</h1>", unsafe_allow_html=True)
+    
+    # Onglets
+    tab1, tab2 = st.tabs(["Plan et structure", "Rédaction"])
+    
+    # Onglet Plan et structure
+    with tab1:
+        st.markdown("<h2 class='section-title'>Plan du mémoire</h2>", unsafe_allow_html=True)
+        
+        # Générer un plan
+        with st.expander("Générer un plan"):
+            plan_prompt = st.text_area("Instructions pour la génération du plan", 
+                                       "Générer un plan de mémoire professionnel pour mon alternance en informatique, avec une structure conforme au RNCP 35284.")
+            
+            if st.button("Générer"):
+                with st.spinner("Génération du plan en cours..."):
+                    result = generate_plan(plan_prompt)
+                    
+                    if result:
+                        st.success("Plan généré avec succès!")
+                        st.text_area("Plan proposé", result["plan"], height=400)
+        
+        # Afficher la structure du mémoire
+        sections_root = get_memoire_sections()
+        
+        if not sections_root:
+            st.info("Aucune section n'a été créée. Vous pouvez générer un plan ou ajouter manuellement des sections.")
+        else:
+            # Afficher la structure en arbre
+            for section in sections_root:
+                section_expander = st.expander(f"{section['titre']}")
+                
+                with section_expander:
+                    # Boutons d'action pour la section principale
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        if st.button(f"Modifier", key=f"edit_main_{section['id']}"):
+                            st.session_state["edit_section"] = section
+                            st.experimental_rerun()
+                    
+                    with col2:
+                        if st.button(f"Supprimer", key=f"delete_main_{section['id']}"):
+                            if delete_memoire_section(section["id"]):
+                                st.success("Section supprimée avec succès!")
+                                st.experimental_rerun()
+                    
+                    with col3:
+                        if st.button(f"Ajouter sous-section", key=f"add_sub_{section['id']}"):
+                            st.session_state["add_subsection"] = section["id"]
+                            st.experimental_rerun()
+                    
+                    # Afficher les sous-sections
+                    subsections = get_memoire_sections(parent_id=section["id"])
+                    
+                    for subsection in subsections:
+                        sub_col1, sub_col2 = st.columns([3, 1])
+                        
+                        with sub_col1:
+                            st.write(f"• {subsection['titre']}")
+                        
+                        with sub_col2:
+                            if st.button(f"Modifier", key=f"edit_sub_{subsection['id']}"):
+                                st.session_state["edit_section"] = subsection
+                                st.experimental_rerun()
+                            
+                            if st.button(f"Supprimer", key=f"delete_sub_{subsection['id']}"):
+                                if delete_memoire_section(subsection["id"]):
+                                    st.success("Sous-section supprimée avec succès!")
+                                    st.experimental_rerun()
+        
+        # Ajouter une section principale
+        with st.expander("Ajouter une section principale"):
+            with st.form("add_main_section_form"):
+                section_title = st.text_input("Titre")
+                section_order = st.number_input("Ordre", min_value=0, step=1)
+                
+                submit_section = st.form_submit_button("Ajouter")
+                
+                if submit_section:
+                    if not section_title:
+                        st.error("Le titre ne peut pas être vide.")
+                    else:
+                        # Préparer les données
+                        section_data = {
+                            "titre": section_title,
+                            "contenu": "",
+                            "ordre": section_order,
+                            "parent_id": None
+                        }
+                        
+                        # Ajouter la section
+                        result = add_memoire_section(section_data)
+                        
+                        if result:
+                            st.success("Section ajoutée avec succès!")
+                            st.experimental_rerun()
+        
+        # Ajouter une sous-section
+        if "add_subsection" in st.session_state:
+            parent_id = st.session_state["add_subsection"]
+            
+            # Récupérer le titre du parent
+            parent_section = get_memoire_section(parent_id)
+            parent_title = parent_section["titre"] if parent_section else "Section parente"
+            
+            st.markdown(f"<h3 class='subsection-title'>Ajouter une sous-section à '{parent_title}'</h3>", unsafe_allow_html=True)
+            
+            with st.form("add_subsection_form"):
+                subsection_title = st.text_input("Titre")
+                subsection_order = st.number_input("Ordre", min_value=0, step=1)
+                
+                submit_subsection = st.form_submit_button("Ajouter")
+                
+                if submit_subsection:
+                    if not subsection_title:
+                        st.error("Le titre ne peut pas être vide.")
+                    else:
+                        # Préparer les données
+                        section_data = {
+                            "titre": subsection_title,
+                            "contenu": "",
+                            "ordre": subsection_order,
+                            "parent_id": parent_id
+                        }
+                        
+                        # Ajouter la section
+                        result = add_memoire_section(section_data)
+                        
+                        if result:
+                            st.success("Sous-section ajoutée avec succès!")
+                            del st.session_state["add_subsection"]
+                            st.experimental_rerun()
+            
+            # Bouton pour annuler
+            if st.button("Annuler l'ajout"):
+                del st.session_state["add_subsection"]
+                st.experimental_rerun()
+        
+        # Modifier une section
+        if "edit_section" in st.session_state:
+            section = st.session_state["edit_section"]
+            
+            st.markdown(f"<h3 class='subsection-title'>Modifier la section</h3>", unsafe_allow_html=True)
+            
+            with st.form("edit_section_form"):
+                edit_title = st.text_input("Titre", section["titre"])
+                edit_order = st.number_input("Ordre", min_value=0, step=1, value=section["ordre"])
+                
+                submit_edit = st.form_submit_button("Enregistrer les modifications")
+                
+                if submit_edit:
+                    if not edit_title:
+                        st.error("Le titre ne peut pas être vide.")
+                    else:
+                        # Préparer les données
+                        update_data = {
+                            "titre": edit_title,
+                            "contenu": section["contenu"] or "",
+                            "ordre": edit_order,
+                            "parent_id": section["parent_id"]
+                        }
+                        
+                        # Mettre à jour la section
+                        result = update_memoire_section(section["id"], update_data)
+                        
+                        if result:
+                            st.success("Section mise à jour avec succès!")
+                            del st.session_state["edit_section"]
+                            st.experimental_rerun()
+            
+            # Bouton pour annuler
+            if st.button("Annuler la modification"):
+                del st.session_state["edit_section"]
+                st.experimental_rerun()
+    
+    # Onglet Rédaction
+    with tab2:
+        st.markdown("<h2 class='section-title'>Rédaction du mémoire</h2>", unsafe_allow_html=True)
+        
+        # Sélection de la section à rédiger
+        all_sections = []
+        sections_root = get_memoire_sections()
+        
+        for section in sections_root:
+            all_sections.append({"id": section["id"], "titre": section["titre"], "parent_id": None})
+            
+            subsections = get_memoire_sections(parent_id=section["id"])
+            for subsection in subsections:
+                all_sections.append({"id": subsection["id"], "titre": f"  • {subsection['titre']}", "parent_id": section["id"]})
+        
+        if not all_sections:
+            st.info("Aucune section n'a été créée. Veuillez d'abord créer une structure dans l'onglet 'Plan et structure'.")
+        else:
+            section_options = {s["titre"]: s["id"] for s in all_sections}
+            selected_section_title = st.selectbox("Sélectionner une section à rédiger", list(section_options.keys()))
+            selected_section_id = section_options[selected_section_title]
+            
+            # Récupérer la section
+            section = get_memoire_section(selected_section_id)
+            
+            if section:
+                # Afficher le contenu actuel
+                section_content = section["contenu"] or ""
+                
+                # Aide à la rédaction
+                with st.expander("Aide à la rédaction"):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        if st.button("Générer du contenu"):
+                            with st.spinner("Génération du contenu en cours..."):
+                                result = generate_content(selected_section_id)
+                                
+                                if result:
+                                    section_content = result["content"]
+                                    st.success("Contenu généré avec succès!")
+                    
+                    with col2:
+                        if st.button("Rechercher des entrées pertinentes"):
+                            # Rechercher des entrées pertinentes pour cette section
+                            results = search_entries(section["titre"])
+                            
+                            if results:
+                                st.success(f"{len(results)} entrées pertinentes trouvées")
+                                
+                                for result in results:
+                                    st.markdown(f"<div class='entry-container'>", unsafe_allow_html=True)
+                                    st.markdown(f"<p class='entry-date'>{result['date']}</p>", unsafe_allow_html=True)
+                                    
+                                    # Afficher un extrait du texte
+                                    text_preview = result["texte"][:200] + "..." if len(result["texte"]) > 200 else result["texte"]
+                                    st.write(text_preview)
+                                    
+                                    # Bouton pour voir l'entrée complète
+                                    with st.expander("Voir l'entrée complète"):
+                                        st.write(result["texte"])
+                                    
+                                    st.markdown("</div>", unsafe_allow_html=True)
+                            else:
+                                st.info("Aucune entrée pertinente trouvée.")
+                
+                # Éditeur de texte
+                new_content = st.text_area("Contenu de la section", section_content, height=500)
+                
+                # Outils d'amélioration
+                with st.expander("Outils d'amélioration"):
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        if st.button("Corriger la grammaire"):
+                            if new_content:
+                                with st.spinner("Correction en cours..."):
+                                    result = improve_text(new_content, "grammar")
+                                    
+                                    if result:
+                                        new_content = result["improved_text"]
+                                        st.success("Texte corrigé!")
+                    
+                    with col2:
+                        if st.button("Améliorer le style"):
+                            if new_content:
+                                with st.spinner("Amélioration en cours..."):
+                                    result = improve_text(new_content, "style")
+                                    
+                                    if result:
+                                        new_content = result["improved_text"]
+                                        st.success("Style amélioré!")
+                    
+                    with col3:
+                        if st.button("Restructurer"):
+                            if new_content:
+                                with st.spinner("Restructuration en cours..."):
+                                    result = improve_text(new_content, "structure")
+                                    
+                                    if result:
+                                        new_content = result["improved_text"]
+                                        st.success("Texte restructuré!")
+                    
+                    with col4:
+                        if st.button("Enrichir"):
+                            if new_content:
+                                with st.spinner("Enrichissement en cours..."):
+                                    result = improve_text(new_content, "expand")
+                                    
+                                    if result:
+                                        new_content = result["improved_text"]
+                                        st.success("Texte enrichi!")
+                
+                # Bouton de sauvegarde
+                if st.button("Enregistrer"):
+                    # Préparer les données
+                    update_data = {
+                        "titre": section["titre"],
+                        "contenu": new_content,
+                        "ordre": section["ordre"],
+                        "parent_id": section["parent_id"]
+                    }
+                    
+                    # Mettre à jour la section
+                    result = update_memoire_section(section["id"], update_data)
+                    
+                    if result:
+                        st.success("Contenu enregistré avec succès!")
+
+elif page == "Chat assistant":
+    st.markdown("<h1 class='main-title'>Assistant de rédaction</h1>", unsafe_allow_html=True)
+    
+    # Initialiser l'historique des messages s'il n'existe pas
+    if "messages" not in st.session_state:
+        st.session_state.messages = [
+            {"role": "assistant", "content": "Bonjour ! Je suis votre assistant de rédaction pour votre mémoire d'alternance. Comment puis-je vous aider aujourd'hui ?"}
+        ]
     
     # Afficher l'historique des messages
-    st.markdown('<div class="chat-box">', unsafe_allow_html=True)
-    
-    for message in st.session_state.chat_messages:
-        if message["role"] == "user":
-            st.markdown(f'<div class="user-message">{message["content"]}</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(f'<div class="assistant-message">{message["content"]}</div>', unsafe_allow_html=True)
-    
-    st.markdown('</div>', unsafe_allow_html=True)
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
     
     # Zone de saisie pour le nouveau message
-    user_message = st.text_input("Votre message", key="user_message")
-    
-    if st.button("Envoyer", key="send_message") or (user_message and user_message != st.session_state.get("last_message", "")):
-        if user_message:
-            # Ajouter le message de l'utilisateur à l'historique
-            st.session_state.chat_messages.append({
-                "role": "user",
-                "content": user_message
-            })
-            
-            # Sauvegarder le dernier message pour éviter les duplications
-            st.session_state.last_message = user_message
-            
-            # Envoyer le message à l'assistant
-            with st.spinner("L'assistant réfléchit..."):
-                response = chat_with_assistant(user_message)
-                
-                # Ajouter la réponse de l'assistant à l'historique
-                st.session_state.chat_messages.append({
-                    "role": "assistant",
-                    "content": response["response"]
-                })
-            
-            # Réinitialiser le champ de saisie
-            st.experimental_rerun()
-    
-    # Options pour le chat
-    with st.expander("Options avancées"):
-        st.checkbox("Inclure les entrées de journal pertinentes", value=True, key="include_journal")
-        st.checkbox("Inclure les sections pertinentes du mémoire", value=True, key="include_sections")
+    if prompt := st.chat_input("Posez votre question..."):
+        # Ajouter le message de l'utilisateur à l'historique
+        st.session_state.messages.append({"role": "user", "content": prompt})
         
-        if st.button("Effacer l'historique", key="clear_history"):
-            st.session_state.chat_messages = []
-            st.success("Historique effacé!")
-            st.experimental_rerun()
+        # Afficher le message de l'utilisateur
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        
+        # Simuler une réponse de l'assistant (à remplacer par l'appel à l'API)
+        with st.chat_message("assistant"):
+            with st.spinner("En train de réfléchir..."):
+                # Ici, vous devriez appeler une API pour obtenir une réponse
+                # Pour l'exemple, nous utilisons une réponse simulée
+                
+                # Dans une version finale, appeler l'API du modèle
+                # response = requests.post(f"{API_URL}/ai/chat", json={"prompt": prompt, "history": st.session_state.messages})
+                # answer = response.json()["response"]
+                
+                # Simulation de réponse
+                time.sleep(1)
+                answer = f"Je vais vous aider avec votre question sur '{prompt}'.\n\nPour rédiger un bon mémoire d'alternance, il est important de structurer votre pensée et de s'appuyer sur votre expérience professionnelle."
+                
+                st.markdown(answer)
+        
+        # Ajouter la réponse de l'assistant à l'historique
+        st.session_state.messages.append({"role": "assistant", "content": answer})
 
-# Pied de page
-st.markdown("---")
-st.markdown("Assistant IA de Rédaction de Mémoire | Propulsé par des modèles open source via Ollama")
-
-# Lancer l'application
-if __name__ == "__main__":
-    st.write("Application démarrée!")
+elif page == "Import PDF":
+    st.markdown("<h1 class='main-title'>Import de documents</h1>", unsafe_allow_html=True)
+    
+    st.markdown("<h2 class='section-title'>Importer un PDF</h2>", unsafe_allow_html=True)
+    
+    # Interface d'upload
+    uploaded_file = st.file_uploader("Choisissez un fichier PDF", type="pdf")
+    
+    if uploaded_file:
+        # Afficher les informations sur le fichier
+        st.write(f"Nom du fichier: {uploaded_file.name}")
+        st.write(f"Taille: {uploaded_file.size / 1024:.2f} KB")
+        
+        # Options d'import
+        entreprises = get_entreprises()
+        entreprise_options = {e["nom"]: e["id"] for e in entreprises}
+        
+        selected_entreprise = st.selectbox("Entreprise associée", list(entreprise_options.keys()))
+        
+        type_entree = st.selectbox("Type d'entrée", ["quotidien", "projet", "formation", "réflexion"])
+        
+        # Bouton pour traiter le PDF
+        if st.button("Importer"):
+            with st.spinner("Traitement du PDF en cours..."):
+                result = process_pdf(uploaded_file, entreprise_options[selected_entreprise], type_entree)
+                
+                if result:
+                    st.success("PDF importé avec succès!")
+                    st.json(result)

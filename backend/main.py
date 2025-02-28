@@ -1,73 +1,21 @@
 import os
 import json
-import uuid
-import asyncio
-from typing import List, Dict, Any, Optional, Tuple
-from datetime import datetime
-from pydantic import BaseModel, Field
-import httpx
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-import chromadb
-from chromadb.utils import embedding_functions
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 import sqlite3
-import logging
+from datetime import datetime
+from typing import List, Optional
+from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+import httpx
+import chromadb
+from chromadb.config import Settings
+import time
+import uuid
+import re
 
-# Configuration de la journalisation
-logging.basicConfig(level=logging.INFO, 
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+app = FastAPI()
 
-# Modèles de données
-class JournalEntry(BaseModel):
-    date: datetime
-    content: str
-    tags: List[str] = []
-    
-class MemoireSection(BaseModel):
-    id: str
-    title: str
-    content: str
-    parent_id: Optional[str] = None
-    order: int
-    last_modified: datetime
-    version: int = 1
-
-class VersionHistory(BaseModel):
-    section_id: str
-    version: int
-    content: str
-    timestamp: datetime
-    comment: str = ""
-
-class GenerateRequest(BaseModel):
-    section_id: str
-    prompt: Optional[str] = None
-
-class ImproveRequest(BaseModel):
-    section_id: str
-    improvement_type: str = "style"  # style, grammar, depth, structure, concision
-
-class ChatMessage(BaseModel):
-    content: str
-    relevant_journal: bool = True
-    relevant_sections: bool = True
-
-class Config:
-    OLLAMA_BASE_URL = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral:7b")
-    DB_PATH = os.getenv("DB_PATH", "./data")
-    VECTOR_DB_PATH = os.getenv("VECTOR_DB_PATH", "./data/vectordb")
-    SQLITE_DB_PATH = os.getenv("SQLITE_DB_PATH", "./data/memoire.db")
-    CHUNK_SIZE = 500
-    CHUNK_OVERLAP = 50
-    
-# Initialisation de l'application
-app = FastAPI(title="Memoire Assistant API")
-config = Config()
-
-# Middleware CORS
+# Configuration CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -76,900 +24,951 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Création des dossiers nécessaires
-os.makedirs(config.DB_PATH, exist_ok=True)
-os.makedirs(config.VECTOR_DB_PATH, exist_ok=True)
+# Modèles Pydantic pour les requêtes et réponses
+class JournalEntry(BaseModel):
+    date: str
+    texte: str
+    entreprise_id: Optional[int] = None
+    type_entree: Optional[str] = "quotidien"
+    source_document: Optional[str] = None
+    tags: Optional[List[str]] = None
 
-# Initialisation de la base de données SQLite
-def init_sqlite_db():
-    conn = sqlite3.connect(config.SQLITE_DB_PATH)
+class MemoireSection(BaseModel):
+    titre: str
+    contenu: Optional[str] = None
+    ordre: int
+    parent_id: Optional[int] = None
+
+class GeneratePlanRequest(BaseModel):
+    prompt: str
+
+class GenerateContentRequest(BaseModel):
+    section_id: int
+    prompt: Optional[str] = None
+
+class ImproveTextRequest(BaseModel):
+    texte: str
+    mode: str  # 'grammar', 'style', 'structure', etc.
+
+# Configuration de la base de données
+def get_db_connection():
+    conn = sqlite3.connect("data/memoire.db")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+# Initialisation de la base de données
+def init_db():
+    """
+    Initialise la base de données avec les tables nécessaires.
+    Cette fonction crée les tables si elles n'existent pas déjà.
+    """
+    # Création du répertoire data s'il n'existe pas
+    os.makedirs("data", exist_ok=True)
+    
+    # Connexion à la base de données
+    conn = sqlite3.connect("data/memoire.db")
     cursor = conn.cursor()
     
-    # Table des sections du mémoire
+    # Création de la table des entreprises
     cursor.execute('''
-    CREATE TABLE IF NOT EXISTS sections (
-        id TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        content TEXT NOT NULL,
-        parent_id TEXT,
-        order_num INTEGER NOT NULL,
-        last_modified TEXT NOT NULL,
-        version INTEGER NOT NULL
-    )
-    ''')
-    
-    # Table de l'historique des versions
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS version_history (
+    CREATE TABLE IF NOT EXISTS entreprises (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        section_id TEXT NOT NULL,
-        version INTEGER NOT NULL,
-        content TEXT NOT NULL,
-        timestamp TEXT NOT NULL,
-        comment TEXT,
-        FOREIGN KEY (section_id) REFERENCES sections(id)
+        nom TEXT NOT NULL,
+        date_debut TEXT NOT NULL,
+        date_fin TEXT,
+        description TEXT
     )
     ''')
     
-    # Table du journal de bord
+    # Création de la table du journal de bord avec structure améliorée
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS journal_entries (
-        id TEXT PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         date TEXT NOT NULL,
-        content TEXT NOT NULL,
-        tags TEXT
+        texte TEXT NOT NULL,
+        entreprise_id INTEGER,
+        type_entree TEXT DEFAULT 'quotidien',
+        source_document TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (entreprise_id) REFERENCES entreprises(id)
     )
     ''')
+    
+    # Création d'une table pour les tags
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS tags (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nom TEXT NOT NULL UNIQUE
+    )
+    ''')
+    
+    # Table de relation many-to-many entre journal_entries et tags
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS entry_tags (
+        entry_id INTEGER,
+        tag_id INTEGER,
+        PRIMARY KEY (entry_id, tag_id),
+        FOREIGN KEY (entry_id) REFERENCES journal_entries(id) ON DELETE CASCADE,
+        FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+    )
+    ''')
+    
+    # Création de la table des sections du mémoire
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS memoire_sections (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        titre TEXT NOT NULL,
+        contenu TEXT,
+        ordre INTEGER NOT NULL,
+        parent_id INTEGER,
+        derniere_modification TEXT NOT NULL,
+        FOREIGN KEY (parent_id) REFERENCES memoire_sections(id)
+    )
+    ''')
+
+    # Création de table pour lier les entrées de journal aux sections du mémoire
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS section_entries (
+        section_id INTEGER,
+        entry_id INTEGER,
+        PRIMARY KEY (section_id, entry_id),
+        FOREIGN KEY (section_id) REFERENCES memoire_sections(id) ON DELETE CASCADE,
+        FOREIGN KEY (entry_id) REFERENCES journal_entries(id) ON DELETE CASCADE
+    )
+    ''')
+    
+    # Insertion des entreprises par défaut si la table est vide
+    cursor.execute("SELECT COUNT(*) FROM entreprises")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute('''
+        INSERT INTO entreprises (nom, date_debut, date_fin, description)
+        VALUES 
+        ('AI Builders', '2023-09-01', '2024-08-31', 'Première année d''alternance'),
+        ('Entreprise Actuelle', '2024-09-01', NULL, 'Deuxième année d''alternance')
+        ''')
+    
+    # Valider les changements
+    conn.commit()
+    conn.close()
+
+# Initialiser la base de données au démarrage
+init_db()
+
+# Configuration du client ChromaDB
+chromadb_client = chromadb.Client(Settings(
+    chroma_db_impl="duckdb+parquet",
+    persist_directory="data/chromadb"
+))
+
+# Créer la collection si elle n'existe pas déjà
+try:
+    journal_collection = chromadb_client.get_collection("journal_entries")
+except:
+    journal_collection = chromadb_client.create_collection("journal_entries")
+
+# Extraction automatique de tags
+def extract_automatic_tags(texte, threshold=0.01):
+    """
+    Extrait automatiquement des tags à partir du texte de l'entrée.
+    Version simplifiée basée sur la fréquence des mots.
+    
+    Args:
+        texte (str): Texte de l'entrée
+        threshold (float): Seuil de fréquence pour considérer un mot comme tag
+    
+    Returns:
+        list: Liste de tags potentiels
+    """
+    import re
+    from collections import Counter
+    
+    # Extraction des mots (sans ponctuation, chiffres, etc.)
+    words = re.findall(r'\b[a-zA-ZÀ-ÿ]{4,}\b', texte.lower())
+    
+    # Filtrer les mots vides (stopwords)
+    stopwords = set(['dans', 'avec', 'pour', 'cette', 'mais', 'avoir', 'faire', 
+                     'cette', 'cette', 'plus', 'tout', 'bien', 'être', 'comme', 
+                     'nous', 'leur', 'sans', 'vous', 'dont'])
+    words = [w for w in words if w not in stopwords]
+    
+    # Compter les occurrences
+    word_counts = Counter(words)
+    total_words = len(words)
+    
+    if total_words == 0:
+        return []
+    
+    # Sélectionner les mots qui dépassent le seuil
+    potential_tags = [word for word, count in word_counts.items() 
+                    if count / total_words > threshold]
+    
+    return potential_tags[:5]  # Limiter à 5 tags maximum
+
+# Routes API pour le journal de bord
+@app.post("/journal/entries")
+async def add_journal_entry(entry: JournalEntry):
+    """Ajoute une entrée au journal de bord"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Si entreprise_id est None, déterminer automatiquement en fonction de la date
+    entreprise_id = entry.entreprise_id
+    if entreprise_id is None:
+        cursor.execute('''
+        SELECT id FROM entreprises 
+        WHERE date_debut <= ? AND (date_fin IS NULL OR date_fin >= ?)
+        ''', (entry.date, entry.date))
+        result = cursor.fetchone()
+        if result:
+            entreprise_id = result[0]
+    
+    # Génération automatique de tags si non fournis
+    tags = entry.tags
+    if not tags:
+        tags = extract_automatic_tags(entry.texte)
+    
+    # Insérer l'entrée
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute('''
+    INSERT INTO journal_entries (date, texte, entreprise_id, type_entree, source_document, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ''', (entry.date, entry.texte, entreprise_id, entry.type_entree, entry.source_document, now))
+    
+    entry_id = cursor.lastrowid
+    
+    # Ajouter les tags
+    if tags:
+        for tag in tags:
+            # Récupérer ou créer le tag
+            cursor.execute("SELECT id FROM tags WHERE nom = ?", (tag,))
+            result = cursor.fetchone()
+            
+            if result:
+                tag_id = result[0]
+            else:
+                cursor.execute("INSERT INTO tags (nom) VALUES (?)", (tag,))
+                tag_id = cursor.lastrowid
+            
+            # Associer le tag à l'entrée
+            cursor.execute("INSERT INTO entry_tags (entry_id, tag_id) VALUES (?, ?)", 
+                          (entry_id, tag_id))
+    
+    conn.commit()
+    
+    # Ajouter l'entrée à la base de données vectorielle
+    journal_collection.add(
+        documents=[entry.texte],
+        metadatas=[{"date": entry.date, "entry_id": entry_id}],
+        ids=[f"entry_{entry_id}"]
+    )
+    
+    # Récupérer l'entrée complète pour la renvoyer
+    cursor.execute('''
+    SELECT j.id, j.date, j.texte, j.type_entree, j.source_document, j.entreprise_id,
+           e.nom as entreprise_nom
+    FROM journal_entries j
+    LEFT JOIN entreprises e ON j.entreprise_id = e.id
+    WHERE j.id = ?
+    ''', (entry_id,))
+    
+    inserted_entry = dict(cursor.fetchone())
+    
+    # Récupérer les tags associés
+    cursor.execute('''
+    SELECT t.nom FROM tags t
+    JOIN entry_tags et ON t.id = et.tag_id
+    WHERE et.entry_id = ?
+    ''', (entry_id,))
+    
+    inserted_entry['tags'] = [row[0] for row in cursor.fetchall()]
+    
+    conn.close()
+    return inserted_entry
+
+@app.get("/journal/entries")
+async def get_journal_entries(start_date: Optional[str] = None, 
+                             end_date: Optional[str] = None,
+                             entreprise_id: Optional[int] = None,
+                             type_entree: Optional[str] = None,
+                             tag: Optional[str] = None):
+    """Récupère les entrées du journal avec filtres optionnels"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    query = '''
+    SELECT DISTINCT j.id, j.date, j.texte, j.type_entree, j.source_document, 
+           j.entreprise_id, e.nom as entreprise_nom
+    FROM journal_entries j
+    LEFT JOIN entreprises e ON j.entreprise_id = e.id
+    '''
+    
+    params = []
+    conditions = []
+    
+    # Ajouter la jointure avec les tags si tag est spécifié
+    if tag:
+        query += '''
+        LEFT JOIN entry_tags et ON j.id = et.entry_id
+        LEFT JOIN tags t ON et.tag_id = t.id
+        '''
+        conditions.append("t.nom = ?")
+        params.append(tag)
+    
+    if start_date:
+        conditions.append("j.date >= ?")
+        params.append(start_date)
+    
+    if end_date:
+        conditions.append("j.date <= ?")
+        params.append(end_date)
+    
+    if entreprise_id:
+        conditions.append("j.entreprise_id = ?")
+        params.append(entreprise_id)
+    
+    if type_entree:
+        conditions.append("j.type_entree = ?")
+        params.append(type_entree)
+    
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    
+    query += " ORDER BY j.date DESC"
+    
+    cursor.execute(query, params)
+    entries = [dict(row) for row in cursor.fetchall()]
+    
+    # Récupérer les tags pour chaque entrée
+    for entry in entries:
+        cursor.execute('''
+        SELECT t.nom FROM tags t
+        JOIN entry_tags et ON t.id = et.tag_id
+        WHERE et.entry_id = ?
+        ''', (entry['id'],))
+        
+        entry['tags'] = [row[0] for row in cursor.fetchall()]
+    
+    conn.close()
+    return entries
+
+@app.get("/journal/entries/{entry_id}")
+async def get_journal_entry(entry_id: int):
+    """Récupère une entrée spécifique du journal"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+    SELECT j.id, j.date, j.texte, j.type_entree, j.source_document, 
+           j.entreprise_id, e.nom as entreprise_nom
+    FROM journal_entries j
+    LEFT JOIN entreprises e ON j.entreprise_id = e.id
+    WHERE j.id = ?
+    ''', (entry_id,))
+    
+    entry = cursor.fetchone()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Entrée non trouvée")
+    
+    result = dict(entry)
+    
+    # Récupérer les tags associés
+    cursor.execute('''
+    SELECT t.nom FROM tags t
+    JOIN entry_tags et ON t.id = et.tag_id
+    WHERE et.entry_id = ?
+    ''', (entry_id,))
+    
+    result['tags'] = [row[0] for row in cursor.fetchall()]
+    
+    conn.close()
+    return result
+
+@app.put("/journal/entries/{entry_id}")
+async def update_journal_entry(entry_id: int, entry: JournalEntry):
+    """Met à jour une entrée existante du journal"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Vérifier si l'entrée existe
+    cursor.execute("SELECT id FROM journal_entries WHERE id = ?", (entry_id,))
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Entrée non trouvée")
+    
+    # Mise à jour de l'entrée
+    cursor.execute('''
+    UPDATE journal_entries 
+    SET date = ?, texte = ?, entreprise_id = ?, type_entree = ?, source_document = ?
+    WHERE id = ?
+    ''', (entry.date, entry.texte, entry.entreprise_id, entry.type_entree, 
+          entry.source_document, entry_id))
+    
+    # Supprimer les anciens tags
+    cursor.execute("DELETE FROM entry_tags WHERE entry_id = ?", (entry_id,))
+    
+    # Ajouter les nouveaux tags
+    if entry.tags:
+        for tag in entry.tags:
+            # Récupérer ou créer le tag
+            cursor.execute("SELECT id FROM tags WHERE nom = ?", (tag,))
+            result = cursor.fetchone()
+            
+            if result:
+                tag_id = result[0]
+            else:
+                cursor.execute("INSERT INTO tags (nom) VALUES (?)", (tag,))
+                tag_id = cursor.lastrowid
+            
+            # Associer le tag à l'entrée
+            cursor.execute("INSERT INTO entry_tags (entry_id, tag_id) VALUES (?, ?)", 
+                          (entry_id, tag_id))
+    
+    conn.commit()
+    
+    # Mettre à jour l'entrée dans la base de données vectorielle
+    journal_collection.update(
+        documents=[entry.texte],
+        metadatas=[{"date": entry.date, "entry_id": entry_id}],
+        ids=[f"entry_{entry_id}"]
+    )
+    
+    # Récupérer l'entrée mise à jour pour la renvoyer
+    cursor.execute('''
+    SELECT j.id, j.date, j.texte, j.type_entree, j.source_document, 
+           j.entreprise_id, e.nom as entreprise_nom
+    FROM journal_entries j
+    LEFT JOIN entreprises e ON j.entreprise_id = e.id
+    WHERE j.id = ?
+    ''', (entry_id,))
+    
+    updated_entry = dict(cursor.fetchone())
+    
+    # Récupérer les tags associés
+    cursor.execute('''
+    SELECT t.nom FROM tags t
+    JOIN entry_tags et ON t.id = et.tag_id
+    WHERE et.entry_id = ?
+    ''', (entry_id,))
+    
+    updated_entry['tags'] = [row[0] for row in cursor.fetchall()]
+    
+    conn.close()
+    return updated_entry
+
+@app.delete("/journal/entries/{entry_id}")
+async def delete_journal_entry(entry_id: int):
+    """Supprime une entrée du journal"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Vérifier si l'entrée existe
+    cursor.execute("SELECT id FROM journal_entries WHERE id = ?", (entry_id,))
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Entrée non trouvée")
+    
+    # Supprimer l'entrée (les tags associés seront supprimés automatiquement grâce à ON DELETE CASCADE)
+    cursor.execute("DELETE FROM journal_entries WHERE id = ?", (entry_id,))
+    conn.commit()
+    conn.close()
+    
+    # Supprimer l'entrée de la base de données vectorielle
+    try:
+        journal_collection.delete(ids=[f"entry_{entry_id}"])
+    except:
+        # Si l'entrée n'existe pas dans ChromaDB, ignorer l'erreur
+        pass
+    
+    return {"status": "success", "message": "Entrée supprimée avec succès"}
+
+@app.get("/entreprises")
+async def get_entreprises():
+    """Récupère la liste des entreprises"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT id, nom, date_debut, date_fin, description FROM entreprises")
+    entreprises = [dict(row) for row in cursor.fetchall()]
+    
+    conn.close()
+    return entreprises
+
+@app.get("/tags")
+async def get_tags():
+    """Récupère la liste des tags avec leur fréquence"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+    SELECT t.id, t.nom, COUNT(et.entry_id) as count
+    FROM tags t
+    LEFT JOIN entry_tags et ON t.id = et.tag_id
+    GROUP BY t.id
+    ORDER BY count DESC
+    ''')
+    
+    tags = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return tags
+
+# Routes API pour la recherche
+@app.get("/search")
+async def search_entries(query: str, limit: int = 5):
+    """Recherche des entrées de journal basée sur la similarité sémantique"""
+    results = journal_collection.query(
+        query_texts=[query],
+        n_results=limit,
+    )
+    
+    if not results or not results['ids'][0]:
+        return []
+    
+    # Récupérer les détails complets des entrées trouvées
+    entry_ids = [int(id.replace("entry_", "")) for id in results['ids'][0]]
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    entries = []
+    for i, entry_id in enumerate(entry_ids):
+        cursor.execute('''
+        SELECT j.id, j.date, j.texte, j.type_entree, j.source_document, 
+               j.entreprise_id, e.nom as entreprise_nom
+        FROM journal_entries j
+        LEFT JOIN entreprises e ON j.entreprise_id = e.id
+        WHERE j.id = ?
+        ''', (entry_id,))
+        
+        entry = cursor.fetchone()
+        if entry:
+            entry_dict = dict(entry)
+            
+            # Ajouter le score de similarité
+            entry_dict['similarity'] = results['distances'][0][i] if 'distances' in results else None
+            
+            # Récupérer les tags
+            cursor.execute('''
+            SELECT t.nom FROM tags t
+            JOIN entry_tags et ON t.id = et.tag_id
+            WHERE et.entry_id = ?
+            ''', (entry_id,))
+            
+            entry_dict['tags'] = [row[0] for row in cursor.fetchall()]
+            
+            entries.append(entry_dict)
+    
+    conn.close()
+    return entries
+
+# Routes API pour le mémoire
+@app.post("/memoire/sections")
+async def add_memoire_section(section: MemoireSection):
+    """Ajoute une section au mémoire"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute('''
+    INSERT INTO memoire_sections (titre, contenu, ordre, parent_id, derniere_modification)
+    VALUES (?, ?, ?, ?, ?)
+    ''', (section.titre, section.contenu, section.ordre, section.parent_id, now))
+    
+    section_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    
+    return {"id": section_id, **section.dict()}
+
+@app.get("/memoire/sections")
+async def get_memoire_sections(parent_id: Optional[int] = None):
+    """Récupère les sections du mémoire"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    if parent_id is not None:
+        cursor.execute('''
+        SELECT id, titre, contenu, ordre, parent_id, derniere_modification
+        FROM memoire_sections
+        WHERE parent_id = ?
+        ORDER BY ordre
+        ''', (parent_id,))
+    else:
+        cursor.execute('''
+        SELECT id, titre, contenu, ordre, parent_id, derniere_modification
+        FROM memoire_sections
+        WHERE parent_id IS NULL
+        ORDER BY ordre
+        ''')
+    
+    sections = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return sections
+
+@app.get("/memoire/sections/{section_id}")
+async def get_memoire_section(section_id: int):
+    """Récupère une section spécifique du mémoire"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+    SELECT id, titre, contenu, ordre, parent_id, derniere_modification
+    FROM memoire_sections
+    WHERE id = ?
+    ''', (section_id,))
+    
+    section = cursor.fetchone()
+    if not section:
+        raise HTTPException(status_code=404, detail="Section non trouvée")
+    
+    result = dict(section)
+    
+    # Récupérer les entrées de journal associées
+    cursor.execute('''
+    SELECT j.id, j.date, j.texte, j.type_entree
+    FROM journal_entries j
+    JOIN section_entries se ON j.id = se.entry_id
+    WHERE se.section_id = ?
+    ''', (section_id,))
+    
+    result['journal_entries'] = [dict(row) for row in cursor.fetchall()]
+    
+    conn.close()
+    return result
+
+@app.put("/memoire/sections/{section_id}")
+async def update_memoire_section(section_id: int, section: MemoireSection):
+    """Met à jour une section du mémoire"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Vérifier si la section existe
+    cursor.execute("SELECT id FROM memoire_sections WHERE id = ?", (section_id,))
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Section non trouvée")
+    
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute('''
+    UPDATE memoire_sections 
+    SET titre = ?, contenu = ?, ordre = ?, parent_id = ?, derniere_modification = ?
+    WHERE id = ?
+    ''', (section.titre, section.contenu, section.ordre, section.parent_id, now, section_id))
     
     conn.commit()
     conn.close()
-    logger.info("Base de données SQLite initialisée")
+    
+    return {"id": section_id, **section.dict(), "derniere_modification": now}
 
-# Initialisation de ChromaDB pour les embeddings
-def init_chroma_db():
-    sentence_transformer_ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name="all-MiniLM-L6-v2"
-    )
+@app.delete("/memoire/sections/{section_id}")
+async def delete_memoire_section(section_id: int):
+    """Supprime une section du mémoire"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
     
-    client = chromadb.PersistentClient(path=config.VECTOR_DB_PATH)
+    # Vérifier si la section existe
+    cursor.execute("SELECT id FROM memoire_sections WHERE id = ?", (section_id,))
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Section non trouvée")
     
-    # Collection pour les sections du mémoire
+    # Supprimer les associations avec les entrées de journal
+    cursor.execute("DELETE FROM section_entries WHERE section_id = ?", (section_id,))
+    
+    # Supprimer la section
+    cursor.execute("DELETE FROM memoire_sections WHERE id = ?", (section_id,))
+    
+    conn.commit()
+    conn.close()
+    
+    return {"status": "success", "message": "Section supprimée avec succès"}
+
+@app.post("/memoire/sections/{section_id}/entries/{entry_id}")
+async def link_entry_to_section(section_id: int, entry_id: int):
+    """Associe une entrée de journal à une section du mémoire"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Vérifier si la section existe
+    cursor.execute("SELECT id FROM memoire_sections WHERE id = ?", (section_id,))
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Section non trouvée")
+    
+    # Vérifier si l'entrée existe
+    cursor.execute("SELECT id FROM journal_entries WHERE id = ?", (entry_id,))
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Entrée non trouvée")
+    
+    # Associer l'entrée à la section
     try:
-        sections_collection = client.get_collection("sections")
-        logger.info("Collection 'sections' récupérée")
-    except ValueError:
-        sections_collection = client.create_collection(
-            name="sections",
-            embedding_function=sentence_transformer_ef
-        )
-        logger.info("Collection 'sections' créée")
-    
-    # Collection pour le journal de bord
-    try:
-        journal_collection = client.get_collection("journal")
-        logger.info("Collection 'journal' récupérée")
-    except ValueError:
-        journal_collection = client.create_collection(
-            name="journal",
-            embedding_function=sentence_transformer_ef
-        )
-        logger.info("Collection 'journal' créée")
-    
-    return client
-
-# Initialisation des bases de données
-init_sqlite_db()
-chroma_client = init_chroma_db()
-
-# Client HTTP pour communiquer avec Ollama
-http_client = httpx.AsyncClient(timeout=60.0)
-
-# Classe pour gérer les interactions avec Ollama
-class OllamaManager:
-    def __init__(self, base_url: str, model: str):
-        self.base_url = base_url
-        self.model = model
-        self.generate_url = f"{base_url}/api/generate"
-        self.embedding_url = f"{base_url}/api/embeddings"
-    
-    async def generate_text(self, prompt: str, system_prompt: Optional[str] = None) -> str:
-        """Génère du texte avec Ollama"""
-        payload = {
-            "model": self.model,
-            "prompt": prompt,
-            "stream": False
-        }
-        
-        if system_prompt:
-            payload["system"] = system_prompt
-            
-        try:
-            response = await http_client.post(self.generate_url, json=payload)
-            response.raise_for_status()
-            return response.json()["response"]
-        except Exception as e:
-            logger.error(f"Erreur lors de la génération de texte avec Ollama: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Erreur Ollama: {str(e)}")
-    
-    async def get_embeddings(self, text: str) -> List[float]:
-        """Obtient les embeddings d'un texte avec Ollama"""
-        payload = {
-            "model": self.model,
-            "prompt": text
-        }
-        
-        try:
-            response = await http_client.post(self.embedding_url, json=payload)
-            response.raise_for_status()
-            return response.json()["embedding"]
-        except Exception as e:
-            logger.error(f"Erreur lors de la récupération des embeddings: {str(e)}")
-            # Utiliser une fonction de repli local si Ollama échoue
-            return self._fallback_embedding(text)
-    
-    def _fallback_embedding(self, text: str) -> List[float]:
-        """Fonction de repli si Ollama échoue pour les embeddings"""
-        # Cette fonction pourrait utiliser une bibliothèque locale comme sentence-transformers
-        # Pour l'instant, nous retournons un vecteur aléatoire (pour la démo uniquement)
-        return [0] * 768  # Taille typique d'embedding
-
-ollama_manager = OllamaManager(config.OLLAMA_BASE_URL, config.OLLAMA_MODEL)
-
-# TextSplitter pour le chunking des documents
-text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=config.CHUNK_SIZE,
-    chunk_overlap=config.CHUNK_OVERLAP,
-    length_function=len
-)
-
-# Classe pour gérer la mémoire et la persistance
-class MemoryManager:
-    def __init__(self, sqlite_path: str, chroma_client):
-        self.sqlite_path = sqlite_path
-        self.chroma_client = chroma_client
-        self.sections_collection = chroma_client.get_collection("sections")
-        self.journal_collection = chroma_client.get_collection("journal")
-    
-    def _get_sqlite_connection(self):
-        """Obtient une connexion à la base de données SQLite"""
-        return sqlite3.connect(self.sqlite_path)
-    
-    async def save_section(self, section: MemoireSection) -> MemoireSection:
-        """Sauvegarde une section du mémoire"""
-        conn = self._get_sqlite_connection()
-        cursor = conn.cursor()
-        
-        # Vérifier si la section existe déjà
-        cursor.execute("SELECT * FROM sections WHERE id = ?", (section.id,))
-        existing = cursor.fetchone()
-        
-        if existing:
-            # Créer une entrée d'historique
-            version = existing[6]  # version dans la DB
-            cursor.execute(
-                "INSERT INTO version_history (section_id, version, content, timestamp, comment) VALUES (?, ?, ?, ?, ?)",
-                (section.id, version, existing[2], existing[5], "Version automatique")
-            )
-            
-            # Mettre à jour la section
-            section.version = version + 1
-            cursor.execute(
-                "UPDATE sections SET title = ?, content = ?, parent_id = ?, order_num = ?, last_modified = ?, version = ? WHERE id = ?",
-                (section.title, section.content, section.parent_id, section.order, section.last_modified.isoformat(), section.version, section.id)
-            )
-        else:
-            # Insérer une nouvelle section
-            cursor.execute(
-                "INSERT INTO sections (id, title, content, parent_id, order_num, last_modified, version) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (section.id, section.title, section.content, section.parent_id, section.order, section.last_modified.isoformat(), section.version)
-            )
-        
+        cursor.execute('''
+        INSERT INTO section_entries (section_id, entry_id)
+        VALUES (?, ?)
+        ''', (section_id, entry_id))
         conn.commit()
-        conn.close()
-        
-        # Indexer le contenu pour la recherche vectorielle
-        await self._index_section_content(section)
-        
-        return section
+    except sqlite3.IntegrityError:
+        # Si l'association existe déjà, ignorer l'erreur
+        pass
     
-    async def _index_section_content(self, section: MemoireSection):
-        """Indexe le contenu d'une section dans ChromaDB"""
-        # Diviser le contenu en chunks
-        chunks = text_splitter.split_text(section.content)
-        
-        # Supprimer les chunks existants pour cette section
-        try:
-            existing_ids = [f"{section.id}_{i}" for i in range(100)]  # Hypothèse max 100 chunks
-            self.sections_collection.delete(ids=existing_ids, where={"section_id": section.id})
-        except Exception as e:
-            logger.warning(f"Erreur lors de la suppression des chunks existants: {str(e)}")
-        
-        # Ajouter les nouveaux chunks
-        if chunks:
-            ids = [f"{section.id}_{i}" for i in range(len(chunks))]
-            metadata = [{"section_id": section.id, "title": section.title, "chunk_index": i} for i in range(len(chunks))]
-            
-            self.sections_collection.add(
-                ids=ids,
-                documents=chunks,
-                metadatas=metadata
-            )
-            logger.info(f"Indexé {len(chunks)} chunks pour la section {section.id}")
-    
-    async def get_section(self, section_id: str) -> MemoireSection:
-        """Récupère une section par son ID"""
-        conn = self._get_sqlite_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT * FROM sections WHERE id = ?", (section_id,))
-        result = cursor.fetchone()
-        
-        conn.close()
-        
-        if not result:
-            raise HTTPException(status_code=404, detail="Section not found")
-        
-        return MemoireSection(
-            id=result[0],
-            title=result[1],
-            content=result[2],
-            parent_id=result[3],
-            order=result[4],
-            last_modified=datetime.fromisoformat(result[5]),
-            version=result[6]
-        )
-    
-    async def get_outline(self) -> List[Dict[str, Any]]:
-        """Récupère la structure du plan du mémoire"""
-        conn = self._get_sqlite_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT id, title, parent_id, order_num FROM sections ORDER BY order_num")
-        results = cursor.fetchall()
-        
-        conn.close()
-        
-        sections = []
-        for result in results:
-            sections.append({
-                "id": result[0],
-                "title": result[1],
-                "parent_id": result[2],
-                "order": result[3]
-            })
-        
-        # Organiser en structure hiérarchique
-        root_sections = [s for s in sections if not s["parent_id"]]
-        for root in root_sections:
-            root["children"] = self._get_children(root["id"], sections)
-        
-        return sorted(root_sections, key=lambda x: x["order"])
-    
-    def _get_children(self, parent_id: str, all_sections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Fonction récursive pour construire l'arborescence"""
-        children = [s for s in all_sections if s.get("parent_id") == parent_id]
-        for child in children:
-            child["children"] = self._get_children(child["id"], all_sections)
-        return sorted(children, key=lambda x: x["order"])
-    
-    async def search_relevant_journal(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
-        """Recherche les entrées de journal pertinentes pour une requête"""
-        try:
-            results = self.journal_collection.query(
-                query_texts=[query],
-                n_results=limit
-            )
-            
-            if not results["ids"][0]:
-                return []
-            
-            entries = []
-            for i, doc_id in enumerate(results["ids"][0]):
-                # Extraire l'ID réel de l'entrée (sans le _chunk_index)
-                entry_id = doc_id.split("_")[0]
-                
-                # Récupérer l'entrée complète
-                conn = self._get_sqlite_connection()
-                cursor = conn.cursor()
-                cursor.execute("SELECT * FROM journal_entries WHERE id = ?", (entry_id,))
-                entry = cursor.fetchone()
-                conn.close()
-                
-                if entry:
-                    entries.append({
-                        "id": entry[0],
-                        "date": entry[1],
-                        "content": entry[2],
-                        "tags": json.loads(entry[3]) if entry[3] else [],
-                        "relevance_score": results["distances"][0][i] if "distances" in results else 1.0
-                    })
-            
-            # Éliminer les doublons (par id)
-            unique_entries = []
-            seen_ids = set()
-            for entry in entries:
-                if entry["id"] not in seen_ids:
-                    unique_entries.append(entry)
-                    seen_ids.add(entry["id"])
-            
-            return unique_entries
-            
-        except Exception as e:
-            logger.error(f"Erreur lors de la recherche dans le journal: {str(e)}")
-            return []
-    
-    async def search_relevant_sections(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
-        """Recherche les sections pertinentes pour une requête"""
-        try:
-            results = self.sections_collection.query(
-                query_texts=[query],
-                n_results=limit
-            )
-            
-            if not results["ids"][0]:
-                return []
-            
-            sections = []
-            for i, doc_id in enumerate(results["ids"][0]):
-                # Extraire l'ID de la section
-                section_id = results["metadatas"][0][i]["section_id"]
-                
-                # Éviter les doublons
-                if not any(s["id"] == section_id for s in sections):
-                    # Récupérer la section complète
-                    try:
-                        section = await self.get_section(section_id)
-                        sections.append({
-                            "id": section.id,
-                            "title": section.title,
-                            "content_preview": section.content[:200] + "..." if len(section.content) > 200 else section.content,
-                            "relevance_score": results["distances"][0][i] if "distances" in results else 1.0
-                        })
-                    except HTTPException:
-                        pass  # Ignorer si la section n'est pas trouvée
-            
-            return sections
-            
-        except Exception as e:
-            logger.error(f"Erreur lors de la recherche de sections: {str(e)}")
-            return []
-    
-    async def add_journal_entry(self, entry: JournalEntry) -> Dict[str, Any]:
-        """Ajoute une entrée au journal de bord"""
-        # Créer un ID
-        entry_id = str(uuid.uuid4())
-        
-        # Sauvegarder l'entrée
-        conn = self._get_sqlite_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute(
-            "INSERT INTO journal_entries (id, date, content, tags) VALUES (?, ?, ?, ?)",
-            (entry_id, entry.date.isoformat(), entry.content, json.dumps(entry.tags))
-        )
-        
-        conn.commit()
-        conn.close()
-        
-        # Indexer pour la recherche vectorielle
-        chunks = text_splitter.split_text(entry.content)
-        
-        if chunks:
-            ids = [f"{entry_id}_{i}" for i in range(len(chunks))]
-            metadata = [{
-                "entry_id": entry_id,
-                "date": entry.date.isoformat(),
-                "tags": json.dumps(entry.tags),
-                "chunk_index": i
-            } for i in range(len(chunks))]
-            
-            self.journal_collection.add(
-                ids=ids,
-                documents=chunks,
-                metadatas=metadata
-            )
-        
-        return {
-            "id": entry_id,
-            "date": entry.date,
-            "content": entry.content,
-            "tags": entry.tags
-        }
-    
-    async def get_journal_entries(self, limit: int = 50, skip: int = 0) -> List[Dict[str, Any]]:
-        """Récupère les entrées du journal de bord"""
-        conn = self._get_sqlite_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT * FROM journal_entries ORDER BY date DESC LIMIT ? OFFSET ?", (limit, skip))
-        results = cursor.fetchall()
-        
-        conn.close()
-        
-        entries = []
-        for result in results:
-            entries.append({
-                "id": result[0],
-                "date": result[1],
-                "content": result[2],
-                "tags": json.loads(result[3]) if result[3] else []
-            })
-        
-        return entries
+    conn.close()
+    return {"status": "success", "message": "Entrée associée à la section avec succès"}
 
-memory_manager = MemoryManager(config.SQLITE_DB_PATH, chroma_client)
+@app.delete("/memoire/sections/{section_id}/entries/{entry_id}")
+async def unlink_entry_from_section(section_id: int, entry_id: int):
+    """Supprime l'association entre une entrée de journal et une section du mémoire"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+    DELETE FROM section_entries
+    WHERE section_id = ? AND entry_id = ?
+    ''', (section_id, entry_id))
+    
+    conn.commit()
+    conn.close()
+    
+    return {"status": "success", "message": "Association supprimée avec succès"}
 
-# Gestionnaire LLM pour la génération de contenu
-class LLMManager:
-    def __init__(self, ollama_manager: OllamaManager):
-        self.ollama = ollama_manager
+# Routes pour l'IA
+# Fonction pour communiquer avec le modèle Ollama
+async def query_ollama(prompt, system=None, model="llama3"):
+    ollama_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
     
-    async def generate_section_content(
-        self,
-        section_title: str,
-        section_description: str,
-        journal_entries: List[Dict[str, Any]],
-        current_outline: List[Dict[str, Any]]
-    ) -> str:
-        """Génère du contenu pour une section basé sur le journal et le plan"""
-        
-        # Limiter la longueur pour respecter les limites du modèle
-        journal_content = ""
-        for entry in journal_entries[:5]:  # Limiter à 5 entrées pour éviter de dépasser le contexte
-            content_preview = entry["content"][:500] + "..." if len(entry["content"]) > 500 else entry["content"]
-            journal_content += f"\n## Date: {entry['date']}\n{content_preview}\n"
-        
-        # Simplifier l'outline pour le prompt
-        simplified_outline = json.dumps([{
-            "title": section.get("title", ""),
-            "id": section.get("id", "")
-        } for section in current_outline], indent=2)
-        
-        system_prompt = """
-        Vous êtes un assistant d'écriture de mémoire professionnel. Vous devez générer du contenu pour 
-        une section d'un mémoire d'alternance pour le titre RNCP 35284 Expert en management des 
-        systèmes d'information. Appuyez-vous sur les entrées du journal fournies et respectez la 
-        structure du mémoire. Votre réponse doit être analytique, réflexive et bien structurée.
-        """
-        
-        user_prompt = f"""
-        # Section à rédiger
-        Titre: {section_title}
-        Description: {section_description}
-        
-        # Structure du mémoire
-        {simplified_outline}
-        
-        # Entrées pertinentes du journal de bord
-        {journal_content}
-        
-        Rédigez un contenu détaillé, analytique et réflexif pour cette section. 
-        Utilisez les entrées du journal comme source d'exemples et d'illustrations.
-        Assurez-vous que le contenu est bien structuré, avec une introduction, un développement
-        et une conclusion si nécessaire. Ne mentionnez pas explicitement que vous utilisez le journal,
-        intégrez naturellement ces informations dans le texte.
-        """
-        
-        return await self.ollama.generate_text(user_prompt, system_prompt)
-    
-    async def generate_initial_outline(self, journal_entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Génère un plan initial basé sur le journal de bord"""
-        # Agréger les entrées du journal
-        journal_content = ""
-        for entry in journal_entries[:10]:  # Limiter pour éviter de dépasser le contexte
-            content_preview = entry["content"][:300] + "..." if len(entry["content"]) > 300 else entry["content"]
-            journal_content += f"\n## Date: {entry['date']}\n{content_preview}\n"
-        
-        system_prompt = """
-        Vous êtes un expert en rédaction de mémoires professionnels. Vous devez générer un plan 
-        structuré pour un mémoire d'alternance pour le titre RNCP 35284 Expert en management des 
-        systèmes d'information. Respectez la structure demandée et basez-vous sur les entrées du journal
-        pour personnaliser le contenu.
-        """
-        
-        user_prompt = f"""
-        Le mémoire doit suivre la structure générale suivante:
-        1. Introduction (entreprise, contexte, objectifs)
-        2. Description de la mission
-        3. Analyse des compétences
-        4. Évaluation de la performance
-        5. Réflexion personnelle et professionnelle
-        6. Conclusion
-        7. Annexes
-        
-        Voici un extrait du journal de bord de l'alternance:
-        
-        {journal_content}
-        
-        Générez un plan détaillé avec:
-        - Les chapitres principaux (niveaux 1)
-        - Les sous-sections (niveaux 2)
-        - Une brève description de chaque section
-        
-        Répondez au format JSON avec la structure suivante:
-        [
-          {{
-            "id": "chapitre-1",
-            "title": "Titre du chapitre",
-            "description": "Description du chapitre",
-            "order": 1,
-            "children": [
-              {{
-                "id": "section-1-1",
-                "title": "Titre de la section",
-                "description": "Description de la section",
-                "parent_id": "chapitre-1",
-                "order": 1,
-                "children": []
-              }}
-            ]
-          }}
-        ]
-        
-        Assurez-vous que le JSON est valide et bien formaté.
-        """
-        
-        response = await self.ollama.generate_text(user_prompt, system_prompt)
-        
-        # Extraire le JSON de la réponse
-        try:
-            # Trouver les délimiteurs du JSON
-            json_start = response.find("[")
-            json_end = response.rfind("]") + 1
-            
-            if json_start == -1 or json_end == 0:
-                raise ValueError("Délimiteurs JSON non trouvés")
-            
-            json_str = response[json_start:json_end]
-            outline = json.loads(json_str)
-            return outline
-        except Exception as e:
-            logger.error(f"Erreur lors du parsing de la réponse LLM: {str(e)}")
-            logger.debug(f"Réponse reçue: {response}")
-            
-            # Plan par défaut en cas d'échec
-            return [
-                {
-                    "id": "intro",
-                    "title": "1. Introduction",
-                    "description": "Présentation de l'entreprise et contexte de la mission",
-                    "order": 1,
-                    "children": [
-                        {
-                            "id": "intro-entreprise",
-                            "title": "1.1 Présentation de l'entreprise",
-                            "description": "Description de l'entreprise, son activité et son marché",
-                            "parent_id": "intro",
-                            "order": 1,
-                            "children": []
-                        },
-                        {
-                            "id": "intro-contexte",
-                            "title": "1.2 Contexte de la mission",
-                            "description": "Contexte et objectifs de la mission d'alternance",
-                            "parent_id": "intro",
-                            "order": 2,
-                            "children": []
-                        }
-                    ]
-                },
-                {
-                    "id": "mission",
-                    "title": "2. Description de la mission",
-                    "description": "Détail des tâches et responsabilités",
-                    "order": 2,
-                    "children": []
-                },
-                {
-                    "id": "competences",
-                    "title": "3. Analyse des compétences",
-                    "description": "Analyse des compétences développées",
-                    "order": 3,
-                    "children": []
-                },
-                {
-                    "id": "evaluation",
-                    "title": "4. Évaluation de la performance",
-                    "description": "Auto-évaluation et feedback reçus",
-                    "order": 4,
-                    "children": []
-                },
-                {
-                    "id": "reflexion",
-                    "title": "5. Réflexion personnelle et professionnelle",
-                    "description": "Réflexion sur l'expérience et l'évolution personnelle",
-                    "order": 5,
-                    "children": []
-                },
-                {
-                    "id": "conclusion",
-                    "title": "6. Conclusion",
-                    "description": "Synthèse et perspectives",
-                    "order": 6,
-                    "children": []
-                }
-            ]
-    
-    async def improve_text(self, text: str, improvement_type: str) -> str:
-        """Améliore un texte selon le type d'amélioration demandé"""
-        prompt_map = {
-            "style": "Améliorez le style d'écriture du texte suivant pour le rendre plus professionnel et fluide.",
-            "grammar": "Corrigez la grammaire et l'orthographe du texte suivant.",
-            "structure": "Améliorez la structure du texte suivant en ajoutant des paragraphes, des transitions et des sous-titres si nécessaire.",
-            "depth": "Approfondissez l'analyse dans le texte suivant en ajoutant plus de réflexion critique.",
-            "concision": "Rendez le texte suivant plus concis sans perdre d'information importante."
-        }
-        
-        system_prompt = "Vous êtes un assistant d'écriture professionnel qui aide à améliorer des textes académiques."
-        
-        user_prompt = f"""
-        {prompt_map.get(improvement_type, "Améliorez le texte suivant.")}
-        
-        Texte original:
-        {text}
-        
-        Texte amélioré:
-        """
-        
-        return await self.ollama.generate_text(user_prompt, system_prompt)
-
-llm_manager = LLMManager(ollama_manager)
-
-# Routes API
-@app.get("/")
-async def root():
-    return {"message": "Memoire Assistant API", "status": "running"}
-
-# Routes pour le plan
-@app.get("/api/outline")
-async def get_outline():
-    """Récupère la structure du plan du mémoire"""
-    return await memory_manager.get_outline()
-
-@app.post("/api/outline")
-async def create_initial_outline():
-    """Crée un plan initial basé sur le journal de bord"""
-    # Récupérer les entrées du journal
-    journal_entries = await memory_manager.get_journal_entries(limit=20)
-    
-    # Générer le plan initial
-    outline = await llm_manager.generate_initial_outline(journal_entries)
-    
-    # Sauvegarder le plan
-    for section in outline:
-        await save_section_recursive(section, memory_manager)
-    
-    return outline
-
-async def save_section_recursive(section, memory_manager):
-    """Sauvegarde récursivement une section et ses enfants"""
-    children = section.pop("children", [])
-    
-    # Créer et sauvegarder la section
-    section_model = MemoireSection(
-        id=section["id"],
-        title=section["title"],
-        content=section.get("description", ""),
-        parent_id=section.get("parent_id"),
-        order=section["order"],
-        last_modified=datetime.now()
-    )
-    await memory_manager.save_section(section_model)
-    
-    # Sauvegarder les enfants
-    for child in children:
-        child["parent_id"] = section["id"]
-        await save_section_recursive(child, memory_manager)
-
-# Routes pour les sections
-@app.get("/api/section/{section_id}")
-async def get_section(section_id: str):
-    """Récupère une section par son ID"""
-    return await memory_manager.get_section(section_id)
-
-@app.post("/api/section/{section_id}/generate")
-async def generate_section_content(section_id: str, request: GenerateRequest):
-    """Génère du contenu pour une section"""
-    # Récupérer la section
-    section = await memory_manager.get_section(section_id)
-    
-    # Récupérer le plan actuel
-    outline = await memory_manager.get_outline()
-    
-    # Trouver des entrées de journal pertinentes
-    query = request.prompt if request.prompt else section.title + " " + section.content
-    relevant_entries = await memory_manager.search_relevant_journal(query)
-    
-    # Générer le contenu
-    content = await llm_manager.generate_section_content(
-        section.title,
-        section.content,  # La description est stockée dans le contenu initialement
-        relevant_entries,
-        outline
-    )
-    
-    # Mettre à jour la section
-    section.content = content
-    section.last_modified = datetime.now()
-    await memory_manager.save_section(section)
-    
-    return section
-
-@app.post("/api/section/{section_id}/improve")
-async def improve_section(section_id: str, request: ImproveRequest):
-    """Améliore le contenu d'une section"""
-    # Récupérer la section
-    section = await memory_manager.get_section(section_id)
-    
-    # Améliorer le contenu
-    improved_content = await llm_manager.improve_text(section.content, request.improvement_type)
-    
-    # Mettre à jour la section
-    section.content = improved_content
-    section.last_modified = datetime.now()
-    await memory_manager.save_section(section)
-    
-    return section
-
-@app.put("/api/section/{section_id}")
-async def update_section(section_id: str, section: MemoireSection):
-    """Met à jour une section existante"""
-    if section_id != section.id:
-        raise HTTPException(status_code=400, detail="Section ID mismatch")
-    
-    section.last_modified = datetime.now()
-    return await memory_manager.save_section(section)
-
-# Routes pour le journal de bord
-@app.post("/api/journal")
-async def add_journal_entry(entry: JournalEntry):
-    """Ajoute une entrée au journal de bord"""
-    return await memory_manager.add_journal_entry(entry)
-
-@app.get("/api/journal")
-async def get_journal_entries(limit: int = 50, skip: int = 0):
-    """Récupère les entrées du journal de bord"""
-    return await memory_manager.get_journal_entries(limit, skip)
-
-@app.post("/api/chat")
-async def chat(message: ChatMessage):
-    """Point d'API pour le chat"""
-    # Récupérer du contenu pertinent si demandé
-    relevant_journal = []
-    relevant_sections = []
-    
-    if message.relevant_journal:
-        relevant_journal = await memory_manager.search_relevant_journal(message.content)
-    
-    if message.relevant_sections:
-        relevant_sections = await memory_manager.search_relevant_sections(message.content)
-    
-    # Construire le contexte pour le LLM
-    journal_content = ""
-    for entry in relevant_journal[:3]:
-        journal_content += f"\n## Date: {entry['date']}\n{entry['content'][:300]}...\n"
-    
-    sections_content = ""
-    for section in relevant_sections[:2]:
-        sections_content += f"\n## {section['title']}\n{section['content_preview']}\n"
-    
-    system_prompt = """
-    Vous êtes un assistant d'écriture de mémoire professionnel. Répondez aux questions de l'utilisateur
-    en vous appuyant sur le contenu du journal de bord et des sections du mémoire si pertinent.
-    Soyez concis, précis et utile.
-    """
-    
-    user_prompt = f"""
-    Question: {message.content}
-    
-    Informations pertinentes du journal de bord:
-    {journal_content if journal_content else "Aucune entrée pertinente trouvée."}
-    
-    Sections pertinentes du mémoire:
-    {sections_content if sections_content else "Aucune section pertinente trouvée."}
-    
-    Veuillez répondre à la question en vous basant sur ces informations si pertinent.
-    """
-    
-    response = await ollama_manager.generate_text(user_prompt, system_prompt)
-    
-    return {
-        "response": response,
-        "context": {
-            "journal_entries_used": len(relevant_journal),
-            "sections_used": len(relevant_sections)
-        }
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False
     }
+    
+    if system:
+        payload["system"] = system
+    
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(f"{ollama_url}/api/generate", json=payload)
+        response.raise_for_status()
+        return response.json()
 
-# WebSocket pour le chat interactif
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
+@app.post("/ai/generate-plan")
+async def generate_plan(request: GeneratePlanRequest):
+    """Génère un plan de mémoire basé sur le journal de bord"""
+    # Récupérer les entrées récentes du journal
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+    SELECT j.date, j.texte, j.type_entree, e.nom as entreprise
+    FROM journal_entries j
+    JOIN entreprises e ON j.entreprise_id = e.id
+    ORDER BY j.date DESC
+    LIMIT 30
+    ''')
+    
+    recent_entries = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    
+    # Construire le contexte pour le modèle
+    context = "Voici des extraits de mon journal de bord:\n\n"
+    for entry in recent_entries:
+        context += f"Date: {entry['date']}\n"
+        context += f"Entreprise: {entry['entreprise']}\n"
+        context += f"Type: {entry['type_entree']}\n"
+        context += f"Contenu: {entry['texte'][:500]}...\n\n"
+    
+    # Construire le prompt
+    system_prompt = """Tu es un assistant spécialisé dans la création de plans de mémoire pour des étudiants en alternance. 
+    Tu dois créer un plan structuré pour un mémoire professionnel basé sur les extraits du journal de bord de l'étudiant.
+    Le plan doit suivre la structure requise pour valider le titre RNCP 35284 Expert en management des systèmes d'information."""
+    
+    user_prompt = f"{context}\n\nÀ partir de ces informations, génère un plan détaillé pour mon mémoire professionnel. {request.prompt}"
+    
+    # Appeler le modèle
+    try:
+        response = await query_ollama(user_prompt, system=system_prompt)
+        plan_text = response.get('response', '')
+        
+        # Créer les sections dans la base de données
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Supprimer les sections existantes
+        cursor.execute("DELETE FROM memoire_sections")
+        conn.commit()
+        
+        # Analyser le plan généré pour extraire les sections
+        lines = plan_text.strip().split('\n')
+        parent_id = None
+        current_order = 0
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Détecter les titres de premier niveau
+            if line.startswith("# ") or line.startswith("1. "):
+                titre = line.split(" ", 1)[1]
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                cursor.execute('''
+                INSERT INTO memoire_sections (titre, contenu, ordre, parent_id, derniere_modification)
+                VALUES (?, ?, ?, ?, ?)
+                ''', (titre, "", current_order, None, now))
+                
+                parent_id = cursor.lastrowid
+                current_order += 1
+            
+            # Détecter les titres de second niveau
+            elif (line.startswith("## ") or line.startswith("1.1") or 
+                  line.startswith("2.1") or line.startswith("- ")):
+                if parent_id:
+                    if line.startswith("- "):
+                        titre = line[2:]
+                    else:
+                        titre = line.split(" ", 1)[1] if " " in line else line
+                    
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    cursor.execute('''
+                    INSERT INTO memoire_sections (titre, contenu, ordre, parent_id, derniere_modification)
+                    VALUES (?, ?, ?, ?, ?)
+                    ''', (titre, "", current_order, parent_id, now))
+                    
+                    current_order += 1
+        
+        conn.commit()
+        conn.close()
+        
+        return {"plan": plan_text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur lors de la génération du plan: {str(e)}")
+
+@app.post("/ai/generate-content")
+async def generate_content(request: GenerateContentRequest):
+    """Génère du contenu pour une section du mémoire basé sur le journal de bord"""
+    # Récupérer la section
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+    SELECT id, titre, parent_id
+    FROM memoire_sections
+    WHERE id = ?
+    ''', (request.section_id,))
+    
+    section = cursor.fetchone()
+    if not section:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Section non trouvée")
+    
+    section_dict = dict(section)
+    
+    # Récupérer le parent si existant
+    parent_title = None
+    if section_dict['parent_id']:
+        cursor.execute('''
+        SELECT titre
+        FROM memoire_sections
+        WHERE id = ?
+        ''', (section_dict['parent_id'],))
+        
+        parent = cursor.fetchone()
+        if parent:
+            parent_title = parent['titre']
+    
+    # Rechercher des entrées pertinentes dans le journal
+    results = journal_collection.query(
+        query_texts=[section_dict['titre']],
+        n_results=5,
+    )
+    
+    relevant_entries = []
+    if results and results['ids'][0]:
+        entry_ids = [int(id.replace("entry_", "")) for id in results['ids'][0]]
+        
+        for entry_id in entry_ids:
+            cursor.execute('''
+            SELECT j.date, j.texte, j.type_entree, e.nom as entreprise
+            FROM journal_entries j
+            JOIN entreprises e ON j.entreprise_id = e.id
+            WHERE j.id = ?
+            ''', (entry_id,))
+            
+            entry = cursor.fetchone()
+            if entry:
+                relevant_entries.append(dict(entry))
+    
+    conn.close()
+    
+    # Construire le contexte pour le modèle
+    context = f"Je dois rédiger la section '{section_dict['titre']}'"
+    if parent_title:
+        context += f" de la partie '{parent_title}'"
+    context += " de mon mémoire professionnel.\n\n"
+    
+    context += "Voici des extraits pertinents de mon journal de bord:\n\n"
+    for entry in relevant_entries:
+        context += f"Date: {entry['date']}\n"
+        context += f"Entreprise: {entry['entreprise']}\n"
+        context += f"Type: {entry['type_entree']}\n"
+        context += f"Contenu: {entry['texte'][:500]}...\n\n"
+    
+    # Construire le prompt
+    system_prompt = """Tu es un assistant spécialisé dans la rédaction de mémoires professionnels. 
+    Tu dois générer un contenu professionnel, bien structuré et détaillé pour une section de mémoire d'alternance.
+    Le contenu doit être basé sur les extraits du journal de bord fournis et adapté au titre de la section."""
+    
+    user_prompt = f"{context}\n\nÀ partir de ces informations, rédige un contenu détaillé et professionnel pour cette section."
+    if request.prompt:
+        user_prompt += f" {request.prompt}"
+    
+    # Appeler le modèle
+    try:
+        response = await query_ollama(user_prompt, system=system_prompt)
+        generated_content = response.get('response', '')
+        
+        # Mettre à jour la section avec le contenu généré
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute('''
+        UPDATE memoire_sections 
+        SET contenu = ?, derniere_modification = ?
+        WHERE id = ?
+        ''', (generated_content, now, request.section_id))
+        
+        conn.commit()
+        conn.close()
+        
+        return {"content": generated_content}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur lors de la génération du contenu: {str(e)}")
+
+@app.post("/ai/improve-text")
+async def improve_text(request: ImproveTextRequest):
+    """Améliore un texte selon différents modes (grammaire, style, structure)"""
+    system_prompts = {
+        "grammar": "Tu es un correcteur orthographique et grammatical expert. Corrige les erreurs dans le texte fourni tout en préservant son sens et sa structure.",
+        "style": "Tu es un expert en rédaction académique. Améliore le style d'écriture du texte fourni pour le rendre plus professionnel et adapté à un mémoire d'alternance.",
+        "structure": "Tu es un expert en structuration de texte. Réorganise et structure le texte fourni pour améliorer sa clarté et sa cohérence.",
+        "expand": "Tu es un expert en rédaction. Développe et enrichis le texte fourni avec plus de détails et d'exemples pertinents."
+    }
+    
+    mode = request.mode.lower()
+    if mode not in system_prompts:
+        raise HTTPException(status_code=400, detail=f"Mode non reconnu: {mode}")
+    
+    system_prompt = system_prompts[mode]
+    user_prompt = f"Voici le texte à améliorer :\n\n{request.texte}"
     
     try:
-        while True:
-            data = await websocket.receive_text()
-            message = json.loads(data)
-            
-            # Traiter différents types de messages
-            if message["type"] == "chat":
-                # Récupérer du contenu pertinent
-                query = message["content"]
-                relevant_journal = await memory_manager.search_relevant_journal(query)
-                relevant_sections = await memory_manager.search_relevant_sections(query)
-                
-                # Construire le contexte pour le LLM
-                journal_content = ""
-                for entry in relevant_journal[:3]:
-                    journal_content += f"\n## Date: {entry['date']}\n{entry['content'][:300]}...\n"
-                
-                sections_content = ""
-                for section in relevant_sections[:2]:
-                    sections_content += f"\n## {section['title']}\n{section['content_preview']}\n"
-                
-                system_prompt = """
-                Vous êtes un assistant d'écriture de mémoire professionnel. Répondez aux questions de l'utilisateur
-                en vous appuyant sur le contenu du journal de bord et des sections du mémoire si pertinent.
-                Soyez concis, précis et utile.
-                """
-                
-                user_prompt = f"""
-                Question: {query}
-                
-                Informations pertinentes du journal de bord:
-                {journal_content if journal_content else "Aucune entrée pertinente trouvée."}
-                
-                Sections pertinentes du mémoire:
-                {sections_content if sections_content else "Aucune section pertinente trouvée."}
-                
-                Veuillez répondre à la question en vous basant sur ces informations si pertinent.
-                """
-                
-                response = await ollama_manager.generate_text(user_prompt, system_prompt)
-                
-                await websocket.send_text(json.dumps({
-                    "type": "chat_response",
-                    "content": response,
-                    "context": {
-                        "journal_entries_used": len(relevant_journal),
-                        "sections_used": len(relevant_sections)
-                    }
-                }))
-            
-            elif message["type"] == "update_section":
-                # Mettre à jour une section
-                section_id = message["section_id"]
-                content = message["content"]
-                
-                section = await memory_manager.get_section(section_id)
-                section.content = content
-                section.last_modified = datetime.now()
-                await memory_manager.save_section(section)
-                
-                await websocket.send_text(json.dumps({
-                    "type": "section_updated",
-                    "section_id": section_id
-                }))
-            
-            # Autres types de messages à implémenter...
-                
-    except WebSocketDisconnect:
-        logger.info("WebSocket déconnecté")
+        response = await query_ollama(user_prompt, system=system_prompt)
+        improved_text = response.get('response', '')
+        
+        return {"improved_text": improved_text}
     except Exception as e:
-        logger.error(f"Erreur WebSocket: {str(e)}")
-        try:
-            await websocket.send_text(json.dumps({
-                "type": "error",
-                "message": str(e)
-            }))
-        except:
-            pass
-    finally:
-        try:
-            await websocket.close()
-        except:
-            pass
+        raise HTTPException(status_code=500, detail=f"Erreur lors de l'amélioration du texte: {str(e)}")
 
+# Point d'entrée pour exécuter l'application
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
