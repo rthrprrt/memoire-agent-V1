@@ -1,0 +1,24 @@
+# Données et modèles
+/data/*
+!/data/.gitkeep
+
+# Environnement Python
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Logs et bases de données
+*.log
+*.sqlite
+
+# Fichiers système
+.DS_Store
+Thumbs.db
+
+# Dossiers Docker
+.docker/

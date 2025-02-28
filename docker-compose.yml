@@ -1,0 +1,64 @@
+# docker-compose.yml
+version: '3'
+
+services:
+  # Service Ollama pour les modèles LLM locaux
+  ollama:
+    image: ollama/ollama:latest
+    container_name: memoire-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    # Si vous n'avez pas de GPU, commentez la section deploy ci-dessus
+    # et décommentez la suivante
+    # command: serve
+
+  # Service backend FastAPI
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: memoire-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./backend:/app
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - OLLAMA_MODEL=mistral:7b  # ou llama3:8b
+      - DB_PATH=/app/data
+      - VECTOR_DB_PATH=/app/data/vectordb
+      - SQLITE_DB_PATH=/app/data/memoire.db
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+  # Service frontend Streamlit
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: memoire-frontend
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./frontend:/app
+    environment:
+      - API_URL=http://backend:8000
+      - WS_URL=ws://backend:8000/ws
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
