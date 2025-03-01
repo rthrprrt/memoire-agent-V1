@@ -11,3 +11,5 @@ tiktoken==0.5.1
 websockets==11.0.3
 sentence-transformers==2.2.2
 huggingface-hub==0.16.4
+PyPDF2==3.0.1
+pdfminer.six==20221105

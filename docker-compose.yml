@@ -53,6 +53,7 @@ services:
       - "8501:8501"
     volumes:
       - ./frontend:/app
+      - ./data:/app/data
     environment:
       - API_URL=http://backend:8000
       - WS_URL=ws://backend:8000/ws
