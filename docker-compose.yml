@@ -10,17 +10,23 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
+      - ./models:/usr/share/ollama/models # Dossier pour les modèles préchargés
     restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    # Si vous n'avez pas de GPU, commentez la section deploy ci-dessus
-    # et décommentez la suivante
-    # command: serve
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Configuration GPU optionnelle - décommenter si GPU disponible
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    # Utiliser par défaut sans GPU
+    command: serve
 
   # Service backend FastAPI
   backend:
@@ -33,15 +39,28 @@ services:
     volumes:
       - ./data:/app/data
       - ./backend:/app
+      - ./logs:/app/logs
     environment:
+      - RESET_DB=true
       - OLLAMA_HOST=http://ollama:11434
       - OLLAMA_MODEL=mistral:7b  # ou llama3:8b
       - DB_PATH=/app/data
       - VECTOR_DB_PATH=/app/data/vectordb
       - SQLITE_DB_PATH=/app/data/memoire.db
+      - CACHE_PATH=/app/data/cache
+      - EXPORT_PATH=/app/data/exports
+      - TEMP_PATH=/app/data/temp
+      - LOG_LEVEL=INFO
+      - ENABLE_WEBSOCKETS=true
     depends_on:
       - ollama
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: ["/app/scripts/init.sh"]
 
   # Service frontend Streamlit
   frontend:
@@ -54,11 +73,38 @@ services:
     volumes:
       - ./frontend:/app
       - ./data:/app/data
+      - ./logs:/app/logs
     environment:
       - API_URL=http://backend:8000
       - WS_URL=ws://backend:8000/ws
+      - STREAMLIT_SERVER_MAX_UPLOAD_SIZE=20
+      - STREAMLIT_CLIENT_TOOLBAR_MODE=minimal
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: ["/app/scripts/wait-for-backend.sh"]
+
+  # Service de sauvegarde automatique (optionnel)
+  backup:
+    image: alpine:latest
+    container_name: memoire-backup
+    volumes:
+      - ./data:/data
+      - ./backups:/backups
+    command: >
+      sh -c "mkdir -p /backups && 
+             while true; do 
+               timestamp=$$(date +%Y%m%d_%H%M%S); 
+               tar -czf /backups/memoire_backup_$$timestamp.tar.gz -C /data .; 
+               find /backups -name 'memoire_backup_*.tar.gz' -mtime +7 -delete; 
+               sleep 86400; 
+             done"
     restart: unless-stopped
 
 volumes:
