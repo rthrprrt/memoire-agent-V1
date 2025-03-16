@@ -107,5 +107,20 @@ services:
              done"
     restart: unless-stopped
 
+  test:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    volumes:
+      - ./backend:/app
+      - ./test_data:/app/test_data
+    environment:
+      - DB_PATH=/app/test_data
+      - VECTOR_DB_PATH=/app/test_data/vectordb
+      - SQLITE_DB_PATH=/app/test_data/test_memoire.db
+      - EXPORT_PATH=/app/test_data/exports
+      - TEST_MODE=true
+    command: ["pytest", "-xvs"]
+
 volumes:
   ollama_data:

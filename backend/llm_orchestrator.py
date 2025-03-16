@@ -303,39 +303,40 @@ class LLMOrchestrator:
             logger.error(f"Erreur lors du streaming: {str(e)}")
             yield f"Erreur: {str(e)}"
     
-    async def get_embeddings(self, text: str) -> List[float]:
-        """
-        Génère des embeddings en utilisant le modèle optimisé pour cette tâche.
-        """
-        try:
-            embedder = self.models["embedder"]["manager"]
-            return await embedder.get_embeddings(text)
-        except Exception as e:
-            logger.error(f"Erreur lors de la génération d'embeddings: {str(e)}")
-            # Fallback sur un autre modèle si le modèle d'embedding échoue
-            try:
-                return await self.models["orchestrator"]["manager"].get_embeddings(text)
-            except:
-                # Dernier recours: embedding local via sentence-transformers
-                return self._local_embedding_fallback(text)
-
-def _local_embedding_fallback(self, text: str) -> List[float]:
+   async def get_embeddings(self, text: str) -> List[float]:
     """
-    Génère des embeddings localement si possible, sinon retourne un vecteur aléatoire.
+    Génère des embeddings en utilisant le modèle optimisé pour cette tâche.
     """
     try:
+        embedder = self.models["embedder"]["manager"]
+        return await embedder.get_embeddings(text)
+    except Exception as e:
+        logger.error(f"Erreur lors de la génération d'embeddings: {str(e)}")
+        # Fallback sur un autre modèle si le modèle d'embedding échoue
         try:
-            from sentence_transformers import SentenceTransformer
-            # On utilise un modèle léger qui devrait être rapide
-            model = SentenceTransformer('all-MiniLM-L6-v2')
-            embedding = model.encode([text])[0].tolist()
-            logger.info("Embeddings générés localement via sentence-transformers")
-            return embedding
-        except ImportError:
-            logger.warning("sentence-transformers n'est pas installé. Utilisation d'un vecteur aléatoire.")
+            return await self.models["orchestrator"]["manager"].get_embeddings(text)
+        except:
+            # Dernier recours: embedding local via sentence-transformers
+            return self._local_embedding_fallback(text)
+
+
+    def _local_embedding_fallback(self, text: str) -> List[float]:
+        """
+        Génère des embeddings localement si possible, sinon retourne un vecteur aléatoire.
+        """
+        try:
+            try:
+                from sentence_transformers import SentenceTransformer
+                # On utilise un modèle léger qui devrait être rapide
+                model = SentenceTransformer('all-MiniLM-L6-v2')
+                embedding = model.encode([text])[0].tolist()
+                logger.info("Embeddings générés localement via sentence-transformers")
+                return embedding
+            except ImportError:
+                logger.warning("sentence-transformers n'est pas installé. Utilisation d'un vecteur aléatoire.")
+                # Génération d'un vecteur aléatoire de dimension 384 comme dernier recours
+                return [random.uniform(-0.1, 0.1) for _ in range(384)]
+        except Exception as e:
+            logger.error(f"Échec du fallback local pour embeddings: {str(e)}")
             # Génération d'un vecteur aléatoire de dimension 384 comme dernier recours
             return [random.uniform(-0.1, 0.1) for _ in range(384)]
-    except Exception as e:
-        logger.error(f"Échec du fallback local pour embeddings: {str(e)}")
-        # Génération d'un vecteur aléatoire de dimension 384 comme dernier recours
-        return [random.uniform(-0.1, 0.1) for _ in range(384)]
