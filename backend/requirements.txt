@@ -21,3 +21,5 @@ aiofiles==23.2.1
 tenacity==8.2.3
 python-dotenv==1.0.0
 loguru==0.7.0
+nltk==3.8.1
+spacy==3.7.2

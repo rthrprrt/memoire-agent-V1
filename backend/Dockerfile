@@ -38,6 +38,9 @@ RUN pip install --no-cache-dir --timeout 300 \
     python-docx==0.8.11 \
     pillow==10.0.0
 
+# Après l'installation des autres dépendances Python
+RUN pip install --no-cache-dir spacy && python -m spacy download en_core_web_sm && python -m spacy download fr_core_news_sm
+
 # Installer les dépendances scientifiques
 RUN pip install --no-cache-dir --timeout 300 \
     matplotlib==3.7.2 \

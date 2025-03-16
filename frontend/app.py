@@ -64,6 +64,30 @@ st.markdown("""
         padding-left: 15px;
         margin-bottom: 20px;
     }
+    .suspect-segment {
+        background-color: #fff3cd;
+        padding: 5px;
+        border-radius: 3px;
+        border-left: 3px solid #ffc107;
+    }
+    .verified-fact {
+        background-color: #d4edda;
+        padding: 5px;
+        border-radius: 3px;
+        border-left: 3px solid #28a745;
+    }
+    .hallucination-metrics {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 15px;
+    }
+    .hallucination-metric {
+        text-align: center;
+        padding: 10px;
+        border-radius: 5px;
+        background-color: #f8f9fa;
+        width: 45%;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -201,9 +225,22 @@ def search_entries(query):
         return []
     return result
 
-# --- Nouvelles fonctions pour les nouveaux endpoints ---
+# --- Nouvelles fonctions d'API pour la détection d'hallucinations ---
+def verify_content(content, context=None):
+    """Vérifie si un contenu contient des hallucinations"""
+    data = {"content": content}
+    if context:
+        data["context"] = context
+    return api_request(requests.post, "ai/check-hallucinations", json=data)
 
-# 1. Génération en mode streaming (pour les réponses longues)
+def improve_hallucinated_content(content, context=None):
+    """Améliore automatiquement un contenu contenant des hallucinations"""
+    data = {"content": content}
+    if context:
+        data["context"] = context
+    return api_request(requests.post, "ai/improve-content", json=data)
+
+# --- Fonctions pour les API existantes ---
 def generate_content_streaming(section_id, prompt=None):
     data = {"section_id": section_id}
     if prompt:
@@ -229,7 +266,6 @@ def generate_content_streaming(section_id, prompt=None):
         st.error(f"Erreur lors de la génération en streaming: {str(e)}")
         return None
 
-# 2. Gestion des références bibliographiques
 def get_references():
     result = api_request(requests.get, "bibliography")
     if result is None:
@@ -239,7 +275,6 @@ def get_references():
 def add_reference(ref_data):
     return api_request(requests.post, "bibliography", json=ref_data)
 
-# 3. Export PDF/Word avec style académique
 def export_memory(format="pdf"):
     try:
         response = requests.post(f"{API_URL}/export", json={"format": format})
@@ -249,7 +284,6 @@ def export_memory(format="pdf"):
         st.error(f"Erreur lors de l'exportation: {str(e)}")
         return None
 
-# 4. Sauvegarde et restauration des données
 def create_backup(description=None):
     data = {}
     if description:
@@ -259,18 +293,15 @@ def create_backup(description=None):
 def restore_backup(backup_id):
     return api_request(requests.post, f"backup/restore/{backup_id}", json={})
 
-# 5. Cache des embeddings
 def get_embedding_cache_status():
     return api_request(requests.get, "embeddings/cache-status")
 
 def clear_embedding_cache():
     return api_request(requests.delete, "embeddings/cache-clear")
 
-# 6. Statut du Circuit Breaker
 def get_circuit_breaker_status():
     return api_request(requests.get, "circuit-breaker/status")
 
-# 7. Fonctions d'import de PDF (inchangées)
 def analyze_pdf(uploaded_file):
     try:
         files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
@@ -303,7 +334,6 @@ with st.sidebar:
 # --- Pages ---
 if page == "Tableau de bord":
     st.markdown("<h1 class='main-title'>Tableau de bord</h1>", unsafe_allow_html=True)
-    # (Code existant pour afficher statistiques et entrées récentes)
     col1, col2, col3 = st.columns(3)
     entries = get_journal_entries()
     with col1:
@@ -392,42 +422,405 @@ elif page == "Journal de bord":
                     result = add_journal_entry(entry_data)
                     if result:
                         st.success("Entrée ajoutée avec succès.")
-
-    # (Onglets pour consulter et rechercher restent inchangés)
+    
+    with tab2:
+        st.markdown("<h2 class='section-title'>Consulter les entrées</h2>", unsafe_allow_html=True)
+        col1, col2 = st.columns(2)
+        with col1:
+            start_date = st.date_input("Date de début", datetime.now() - timedelta(days=30))
+            entreprises = get_entreprises()
+            entreprise_options = {e["nom"]: e["id"] for e in entreprises}
+            entreprise = st.selectbox("Entreprise (filtre)", ["Toutes"] + list(entreprise_options.keys()))
+        with col2:
+            end_date = st.date_input("Date de fin", datetime.now())
+            all_tags = get_tags()
+            tag_options = [tag["nom"] for tag in all_tags]
+            tag = st.selectbox("Tag (filtre)", ["Tous"] + tag_options)
+        
+        entreprise_id = entreprise_options[entreprise] if entreprise != "Toutes" else None
+        tag_filter = tag if tag != "Tous" else None
+        
+        if st.button("Rechercher"):
+            entries = get_journal_entries(
+                start_date=start_date.strftime("%Y-%m-%d"),
+                end_date=end_date.strftime("%Y-%m-%d"),
+                entreprise_id=entreprise_id,
+                tag=tag_filter
+            )
+            
+            if entries:
+                for entry in entries:
+                    st.markdown(f"<div class='entry-container'>", unsafe_allow_html=True)
+                    st.markdown(f"<p class='entry-date'>{entry['date']}</p>", unsafe_allow_html=True)
+                    tags_html = "".join(f"<span class='tag'>{tag}</span>" for tag in entry.get("tags", []))
+                    st.markdown(tags_html, unsafe_allow_html=True)
+                    st.write(entry["texte"])
+                    
+                    col1, col2, col3 = st.columns([1, 1, 3])
+                    with col1:
+                        if st.button(f"Modifier #{entry['id']}"):
+                            st.session_state['edit_entry'] = entry
+                    with col2:
+                        if st.button(f"Supprimer #{entry['id']}"):
+                            if delete_journal_entry(entry['id']):
+                                st.success(f"Entrée {entry['id']} supprimée")
+                    
+                    st.markdown("</div>", unsafe_allow_html=True)
+            else:
+                st.info("Aucune entrée trouvée avec ces critères.")
+    
+    with tab3:
+        st.markdown("<h2 class='section-title'>Recherche</h2>", unsafe_allow_html=True)
+        search_query = st.text_input("Rechercher dans le journal")
+        if search_query:
+            results = search_entries(search_query)
+            if results:
+                st.write(f"{len(results)} résultats trouvés.")
+                for result in results:
+                    st.markdown(f"<div class='entry-container'>", unsafe_allow_html=True)
+                    st.markdown(f"<p class='entry-date'>{result['date']}</p>", unsafe_allow_html=True)
+                    
+                    # Afficher le score de similarité s'il est présent
+                    if 'similarity' in result:
+                        st.markdown(f"<span style='background-color: #e6f7ff; padding: 3px 8px; border-radius: 10px;'>Score: {result['similarity']:.2f}</span>", unsafe_allow_html=True)
+                    
+                    tags_html = "".join(f"<span class='tag'>{tag}</span>" for tag in result.get("tags", []))
+                    st.markdown(tags_html, unsafe_allow_html=True)
+                    st.write(result["texte"])
+                    st.markdown("</div>", unsafe_allow_html=True)
+            else:
+                st.info("Aucun résultat trouvé.")
 
 elif page == "Éditeur de mémoire":
     st.markdown("<h1 class='main-title'>Éditeur de mémoire</h1>", unsafe_allow_html=True)
-    # (Code existant pour la gestion des sections du mémoire)
+    
+    # Onglets modifiés pour inclure la vérification d'hallucinations
+    tab1, tab2, tab3, tab4 = st.tabs(["Plan", "Édition des sections", "Vérification d'hallucinations", "Bibliographie"])
+    
+    with tab1:
+        st.markdown("<h2 class='section-title'>Plan du mémoire</h2>", unsafe_allow_html=True)
+        if st.button("Générer un plan"):
+            prompt = st.text_area("Instructions pour la génération du plan (optionnel)", height=100)
+            with st.spinner("Génération du plan en cours..."):
+                result = generate_plan(prompt)
+                if result:
+                    st.success("Plan généré avec succès!")
+                    st.write(result["plan"])
+        
+        st.markdown("<h3 class='subsection-title'>Plan actuel</h3>", unsafe_allow_html=True)
+        root_sections = get_memoire_sections()
+        
+        if root_sections:
+            for section in root_sections:
+                st.markdown(f"**{section['titre']}**")
+                sub_sections = get_memoire_sections(section['id'])
+                for sub in sub_sections:
+                    st.markdown(f"- {sub['titre']}")
+        else:
+            st.info("Aucune section trouvée. Générez un plan ou ajoutez des sections manuellement.")
+        
+        with st.expander("Ajouter une section manuellement"):
+            with st.form("add_section_form"):
+                section_title = st.text_input("Titre de la section")
+                parent_sections = [("Aucun (section racine)", None)] + [(s['titre'], s['id']) for s in root_sections]
+                parent_id = st.selectbox("Section parente", parent_sections, format_func=lambda x: x[0])
+                section_order = st.number_input("Ordre", min_value=0, value=0)
+                section_content = st.text_area("Contenu initial (optionnel)", height=100)
+                
+                if st.form_submit_button("Ajouter la section"):
+                    if section_title:
+                        section_data = {
+                            "titre": section_title,
+                            "parent_id": parent_id[1],  # Récupérer l'ID
+                            "ordre": section_order,
+                            "contenu": section_content
+                        }
+                        result = add_memoire_section(section_data)
+                        if result:
+                            st.success("Section ajoutée avec succès!")
+    
+    with tab2:
+        st.markdown("<h2 class='section-title'>Édition des sections</h2>", unsafe_allow_html=True)
+        
+        # Liste des sections disponibles
+        all_sections = []
+        root_sections = get_memoire_sections()
+        
+        for section in root_sections:
+            all_sections.append((f"{section['titre']}", section['id']))
+            sub_sections = get_memoire_sections(section['id'])
+            for sub in sub_sections:
+                all_sections.append((f"--- {sub['titre']}", sub['id']))
+        
+        if all_sections:
+            selected_section = st.selectbox("Sélectionner une section à éditer", all_sections)
+            if selected_section:
+                section_id = selected_section[1]
+                section = get_memoire_section(section_id)
+                
+                if section:
+                    with st.form("edit_section_form"):
+                        edit_title = st.text_input("Titre", section['titre'])
+                        edit_content = st.text_area("Contenu", section.get('contenu', ''), height=400)
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.form_submit_button("Enregistrer les modifications"):
+                                update_data = {
+                                    "titre": edit_title,
+                                    "contenu": edit_content
+                                }
+                                result = update_memoire_section(section_id, update_data)
+                                if result:
+                                    st.success("Section mise à jour avec succès!")
+                        
+                        with col2:
+                            if st.form_submit_button("Générer du contenu avec l'IA"):
+                                prompt = st.text_area("Instructions spécifiques pour l'IA (optionnel)", height=100)
+                                with st.spinner("Génération du contenu en cours..."):
+                                    result = generate_content(section_id, prompt)
+                                    if result:
+                                        st.success("Contenu généré avec succès!")
+                                        edit_content = result['generated_content']
+                                        st.text_area("Contenu généré", edit_content, height=400)
+                    
+                    # Afficher les entrées de journal associées
+                    if 'journal_entries' in section and section['journal_entries']:
+                        st.markdown("<h3 class='subsection-title'>Entrées de journal associées</h3>", unsafe_allow_html=True)
+                        for entry in section['journal_entries']:
+                            st.markdown(f"<div class='entry-container'>", unsafe_allow_html=True)
+                            st.markdown(f"<p class='entry-date'>{entry['date']}</p>", unsafe_allow_html=True)
+                            st.write(entry["content"][:200] + "..." if len(entry["content"]) > 200 else entry["content"])
+                            st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            st.info("Aucune section disponible. Générez un plan ou ajoutez des sections manuellement.")
+    
+    # Nouvel onglet pour la vérification d'hallucinations
+    with tab3:
+        st.markdown("<h2 class='section-title'>Vérification d'hallucinations</h2>", unsafe_allow_html=True)
+        st.write("Cet outil détecte et corrige les affirmations potentiellement inexactes ou non vérifiables dans votre mémoire.")
+        
+        # Choix entre le texte saisi ou une section existante
+        source_option = st.radio("Source du contenu à vérifier", ["Saisir un texte", "Sélectionner une section existante"])
+        
+        if source_option == "Saisir un texte":
+            content_to_verify = st.text_area("Contenu à vérifier", height=200, 
+                                           placeholder="Saisissez ici le texte à vérifier pour détecter d'éventuelles hallucinations...")
+        else:
+            all_sections = []
+            root_sections = get_memoire_sections()
+            
+            for section in root_sections:
+                all_sections.append((f"{section['titre']}", section['id']))
+                sub_sections = get_memoire_sections(section['id'])
+                for sub in sub_sections:
+                    all_sections.append((f"--- {sub['titre']}", sub['id']))
+            
+            if all_sections:
+                selected_section = st.selectbox("Sélectionner une section à vérifier", all_sections, key="verify_section_select")
+                if selected_section:
+                    section = get_memoire_section(selected_section[1])
+                    if section and section.get('contenu'):
+                        content_to_verify = section.get('contenu', '')
+                        st.text_area("Contenu de la section", content_to_verify, height=200)
+                    else:
+                        st.warning("Cette section ne contient pas de contenu à vérifier.")
+                        content_to_verify = ""
+            else:
+                st.info("Aucune section disponible.")
+                content_to_verify = ""
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Vérifier le contenu"):
+                if content_to_verify:
+                    with st.spinner("Analyse en cours..."):
+                        result = verify_content(content_to_verify)
+                        if result:
+                            # Afficher les résultats de la vérification
+                            st.markdown("<div class='hallucination-metrics'>", unsafe_allow_html=True)
+                            st.markdown(f"<div class='hallucination-metric'>Score de confiance: {result['confidence_score']:.2f}</div>", unsafe_allow_html=True)
+                            if result["has_hallucinations"]:
+                                st.markdown(f"<div class='hallucination-metric' style='color: #dc3545;'>Hallucinations détectées: Oui</div>", unsafe_allow_html=True)
+                            else:
+                                st.markdown(f"<div class='hallucination-metric' style='color: #28a745;'>Hallucinations détectées: Non</div>", unsafe_allow_html=True)
+                            st.markdown("</div>", unsafe_allow_html=True)
+                            
+                            if result["has_hallucinations"]:
+                                st.error("Des hallucinations potentielles ont été détectées!")
+                                st.markdown("<h4>Segments suspects:</h4>", unsafe_allow_html=True)
+                                for i, segment in enumerate(result["suspect_segments"]):
+                                    st.markdown(f"<div class='suspect-segment'>Segment {i+1}: {segment['text']}</div>", unsafe_allow_html=True)
+                            else:
+                                st.success("Aucune hallucination détectée!")
+                            
+                            if result["verified_facts"]:
+                                st.markdown("<h4>Faits vérifiés:</h4>", unsafe_allow_html=True)
+                                for i, fact in enumerate(result["verified_facts"]):
+                                    st.markdown(f"<div class='verified-fact'>{fact['text']}</div>", unsafe_allow_html=True)
+                else:
+                    st.error("Veuillez entrer du contenu à vérifier.")
+
+        with col2:
+            if st.button("Améliorer automatiquement"):
+                if content_to_verify:
+                    with st.spinner("Amélioration en cours..."):
+                        result = improve_hallucinated_content(content_to_verify)
+                        if result and "corrected_content" in result:
+                            st.success(f"Contenu amélioré avec {result.get('changes_made', 0)} modifications.")
+                            improved_content = result["corrected_content"]
+                            st.text_area("Contenu amélioré", improved_content, height=300)
+                            
+                            # Option pour mettre à jour la section directement
+                            if source_option == "Sélectionner une section existante" and st.button("Remplacer le contenu de la section par la version améliorée"):
+                                section_id = selected_section[1]
+                                update_data = {"contenu": improved_content}
+                                update_result = update_memoire_section(section_id, update_data)
+                                if update_result:
+                                    st.success("Section mise à jour avec le contenu amélioré!")
+                            
+                            # Option pour voir les différences
+                            if result.get("improvement_notes"):
+                                st.markdown("<h4>Modifications apportées:</h4>", unsafe_allow_html=True)
+                                for note in result["improvement_notes"]:
+                                    st.markdown(f"- {note}")
+                else:
+                    st.error("Veuillez entrer du contenu à améliorer.")
+    
+    with tab4:
+        st.markdown("<h2 class='section-title'>Bibliographie</h2>", unsafe_allow_html=True)
+        references = get_references()
+        
+        if references:
+            st.write(f"{len(references)} références bibliographiques")
+            for ref in references:
+                st.markdown(f"<div class='card'>", unsafe_allow_html=True)
+                st.markdown(f"**{ref['title']}**")
+                st.markdown(f"*{ref['citation']}*")
+                st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            st.info("Aucune référence bibliographique trouvée.")
+        
+        with st.expander("Ajouter une référence"):
+            with st.form("add_reference_form"):
+                ref_type = st.selectbox("Type", ["livre", "article", "site web", "rapport"])
+                ref_title = st.text_input("Titre")
+                ref_authors = st.text_input("Auteurs (séparés par des virgules)")
+                ref_year = st.number_input("Année", min_value=1900, max_value=datetime.now().year, step=1)
+                ref_publisher = st.text_input("Éditeur/Journal")
+                
+                if st.form_submit_button("Ajouter la référence"):
+                    if ref_title and ref_authors:
+                        authors_list = [a.strip() for a in ref_authors.split(",")]
+                        ref_data = {
+                            "type": ref_type,
+                            "title": ref_title,
+                            "authors": authors_list,
+                            "year": ref_year,
+                            "publisher": ref_publisher
+                        }
+                        result = add_reference(ref_data)
+                        if result:
+                            st.success("Référence ajoutée avec succès!")
 
 elif page == "Chat assistant":
     st.markdown("<h1 class='main-title'>Chat Assistant</h1>", unsafe_allow_html=True)
-    streaming = st.checkbox("Utiliser le streaming des réponses longues")
-    section_id = st.text_input("Section ID", "section-1")
-    prompt = st.text_area("Votre prompt", "Entrez votre demande ici...")
+    
+    # Option pour vérifier les hallucinations dans les réponses générées
+    col1, col2 = st.columns(2)
+    with col1:
+        streaming = st.checkbox("Utiliser le streaming des réponses longues")
+    with col2:
+        check_hallucinations = st.checkbox("Vérifier automatiquement les hallucinations", value=True)
+    
+    section_id = st.text_input("ID de la section (optionnel)")
+    prompt = st.text_area("Votre prompt", "Entrez votre demande ici...", height=150)
+    
     if st.button("Générer du contenu"):
         if streaming:
             st.info("Génération en streaming...")
             generated = generate_content_streaming(section_id, prompt)
             st.text_area("Contenu généré", generated, height=300)
+            
+            # Vérification après génération si l'option est activée
+            if check_hallucinations and generated:
+                with st.spinner("Vérification des hallucinations..."):
+                    verification = verify_content(generated)
+                    if verification and verification.get("has_hallucinations"):
+                        st.warning("Des hallucinations potentielles ont été détectées dans le contenu généré.")
+                        st.markdown("<h4>Segments suspects:</h4>", unsafe_allow_html=True)
+                        for segment in verification["suspect_segments"]:
+                            st.markdown(f"<div class='suspect-segment'>{segment['text']}</div>", unsafe_allow_html=True)
+                        
+                        if st.button("Améliorer automatiquement le contenu"):
+                            with st.spinner("Amélioration en cours..."):
+                                improved = improve_hallucinated_content(generated)
+                                if improved:
+                                    st.text_area("Contenu amélioré", improved["corrected_content"], height=300)
+                    elif verification:
+                        st.success("Aucune hallucination détectée dans le contenu généré.")
         else:
-            generated = generate_content(section_id, prompt)
-            st.text_area("Contenu généré", generated, height=300)
+            with st.spinner("Génération en cours..."):
+                generated_result = generate_content(section_id, prompt)
+                if generated_result and "generated_content" in generated_result:
+                    generated = generated_result["generated_content"]
+                    st.text_area("Contenu généré", generated, height=300)
+                    
+                    # Vérification après génération si l'option est activée
+                    if check_hallucinations:
+                        with st.spinner("Vérification des hallucinations..."):
+                            verification = verify_content(generated)
+                            if verification and verification.get("has_hallucinations"):
+                                st.warning("Des hallucinations potentielles ont été détectées dans le contenu généré.")
+                                st.markdown("<h4>Segments suspects:</h4>", unsafe_allow_html=True)
+                                for segment in verification["suspect_segments"]:
+                                    st.markdown(f"<div class='suspect-segment'>{segment['text']}</div>", unsafe_allow_html=True)
+                                
+                                if st.button("Améliorer automatiquement le contenu"):
+                                    with st.spinner("Amélioration en cours..."):
+                                        improved = improve_hallucinated_content(generated)
+                                        if improved:
+                                            st.text_area("Contenu amélioré", improved["corrected_content"], height=300)
+                            elif verification:
+                                st.success("Aucune hallucination détectée dans le contenu généré.")
 
 elif page == "Import PDF":
     st.markdown("<h1 class='main-title'>Import PDF</h1>", unsafe_allow_html=True)
+    st.write("Importez des fichiers PDF pour extraire automatiquement des entrées de journal.")
+    
     uploaded_file = st.file_uploader("Choisissez un fichier PDF", type=["pdf"])
     if uploaded_file is not None:
-        if st.button("Analyser le PDF"):
-            analysis = analyze_pdf(uploaded_file)
-            if analysis:
-                st.json(analysis)
-        if st.button("Importer le PDF"):
+        st.write(f"Fichier chargé: {uploaded_file.name}")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Analyser le PDF"):
+                with st.spinner("Analyse en cours..."):
+                    analysis = analyze_pdf(uploaded_file)
+                    if analysis:
+                        st.success(f"Analyse terminée. {len(analysis)} entrées potentielles trouvées.")
+                        st.json(analysis)
+        
+        with col2:
             entreprises = get_entreprises()
             entreprise_options = {e["nom"]: e["id"] for e in entreprises}
             entreprise = st.selectbox("Entreprise pour l'import", list(entreprise_options.keys()))
-            result = import_pdf(uploaded_file, entreprise_id=entreprise_options[entreprise])
-            if result:
-                st.success("PDF importé et entrées créées.")
+            
+            if st.button("Importer le PDF"):
+                with st.spinner("Import en cours..."):
+                    result = import_pdf(uploaded_file, entreprise_id=entreprise_options[entreprise])
+                    if result:
+                        st.success(f"PDF importé. {len(result.get('entries', []))} entrées créées.")
+                        
+                        # Option pour vérifier les hallucinations dans le contenu importé
+                        if st.checkbox("Vérifier les hallucinations dans le contenu importé"):
+                            for i, entry in enumerate(result.get('entries', [])):
+                                st.write(f"Vérification de l'entrée {i+1}...")
+                                verification = verify_content(entry.get('texte', ''))
+                                if verification and verification.get("has_hallucinations"):
+                                    st.warning(f"Hallucinations détectées dans l'entrée {i+1}")
+                                    for segment in verification["suspect_segments"]:
+                                        st.markdown(f"<div class='suspect-segment'>{segment['text']}</div>", unsafe_allow_html=True)
 
 elif page == "Admin & Outils":
     st.markdown("<h1 class='main-title'>Administration et Outils</h1>", unsafe_allow_html=True)

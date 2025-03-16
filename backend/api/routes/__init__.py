@@ -6,6 +6,7 @@ from api.routes.ai import router as ai_router
 from api.routes.search import router as search_router
 from api.routes.export import router as export_router
 from api.routes.admin import router as admin_router
+from api.routes.hallucination import router as hallucination_router  # Nouveau routeur
 
 # Ces variables sont importées par main.py
 journal = journal_router
@@ -14,3 +15,4 @@ ai = ai_router
 search = search_router
 export = export_router
 admin = admin_router
+hallucination = hallucination_router  # Nouveau routeur

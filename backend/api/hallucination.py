@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional, List
 import logging
 
 from pydantic import BaseModel
-from hallucination_detector import HallucinationDetector
+from utils.hallucination_detector import HallucinationDetector
 from core.memory_manager import get_memory_manager
 
 # Configuration du logger
