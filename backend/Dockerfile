@@ -51,7 +51,6 @@ RUN pip install --no-cache-dir --timeout 600 \
     huggingface-hub==0.16.4
 
 # Installer sentence-transformers séparément avec un timeout encore plus long
-# et continuer même en cas d'échec
 RUN pip install --no-cache-dir --timeout 900 --retries 3 \
     sentence-transformers==2.2.2 || \
     echo "Warning: sentence-transformers installation failed, but continuing build"
@@ -63,8 +62,7 @@ RUN mkdir -p /app/data /app/logs /app/scripts
 COPY . .
 
 # S'assurer que les scripts sont exécutables
-RUN mkdir -p /app/scripts && \
-    if [ -f /app/scripts/init.sh ]; then chmod +x /app/scripts/init.sh; fi
+RUN chmod +x /app/scripts/*.sh
 
 # Exposer le port 8000
 EXPOSE 8000
