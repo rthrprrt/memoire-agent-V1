@@ -12,9 +12,8 @@ async def verify_api_key(api_key: Optional[str] = Depends(api_key_header)):
     if settings.API_KEY:
         if not api_key or api_key != settings.API_KEY:
             raise HTTPException(
-                status_code=status.HTTP_401raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="API key invalide ou manquante",
+                detail="Invalid API key",
                 headers={"WWW-Authenticate": "ApiKey"},
             )
     return True

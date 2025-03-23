@@ -1,6 +1,12 @@
 import os
-from pydantic_settings import BaseSettings
 from typing import List, Optional
+
+try:
+    # Pydantic v2
+    from pydantic_settings import BaseSettings
+except ImportError:
+    # Fallback pour Pydantic v1
+    from pydantic import BaseSettings
 
 class Settings(BaseSettings):
     """Configuration centralisée de l'application"""
@@ -35,8 +41,17 @@ class Settings(BaseSettings):
     # Fonctionnalités
     ENABLE_WEBSOCKETS: bool = os.getenv("ENABLE_WEBSOCKETS", "true").lower() == "true"
     
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    # Support pour Pydantic v1 et v2
+    try:
+        # Pydantic v2
+        model_config = {
+            "env_file": ".env",
+            "case_sensitive": True
+        }
+    except:
+        # Pydantic v1 fallback
+        class Config:
+            env_file = ".env"
+            case_sensitive = True
 
 settings = Settings()

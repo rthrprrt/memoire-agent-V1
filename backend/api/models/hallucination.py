@@ -28,8 +28,8 @@ class HallucinationCheckRequest(BaseModel):
     content: str = Field(..., description="Contenu à vérifier")
     context: Optional[Dict[str, Any]] = Field(None, description="Contexte additionnel pour la vérification")
     
-    class Config:
-        schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "content": "Selon des études récentes, 87% des utilisateurs préfèrent cette approche.",
                 "context": {
@@ -38,6 +38,7 @@ class HallucinationCheckRequest(BaseModel):
                 }
             }
         }
+    }
 
 class HallucinationCheckResponse(BaseModel):
     """Réponse de vérification d'hallucinations"""
@@ -54,13 +55,14 @@ class ImproveContentRequest(BaseModel):
     context: Optional[Dict[str, Any]] = Field(None, description="Contexte additionnel")
     improvement_type: Optional[str] = Field("hallucinations", description="Type d'amélioration (hallucinations, style, etc.)")
     
-    class Config:
-        schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "content": "Selon des études récentes, 87% des utilisateurs préfèrent cette approche.",
                 "improvement_type": "hallucinations"
             }
         }
+    }
 
 class ImproveContentResponse(BaseModel):
     """Réponse d'amélioration de contenu"""

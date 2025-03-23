@@ -22,6 +22,7 @@ RUN pip install --upgrade pip && \
     uvicorn==0.23.2 \
     httpx==0.25.0 \
     pydantic==2.3.0 \
+    pydantic-settings==2.0.3 \
     python-multipart==0.0.6 \
     sqlalchemy==2.0.20 \
     websockets==11.0.3 \
@@ -57,6 +58,9 @@ RUN pip install --no-cache-dir --timeout 600 \
 RUN pip install --no-cache-dir --timeout 900 --retries 3 \
     sentence-transformers==2.2.2 || \
     echo "Warning: sentence-transformers installation failed, but continuing build"
+
+# S'assurer que pydantic-settings est installé (nécessaire pour Pydantic v2)
+RUN pip install --no-cache-dir pydantic-settings==2.0.3
 
 # Créer les répertoires nécessaires
 RUN mkdir -p /app/data /app/logs /app/scripts

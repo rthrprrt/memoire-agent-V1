@@ -18,6 +18,15 @@ except ImportError:
     llm_orchestrator = None
     logger.warning("LLMOrchestrator non disponible, utilisation du mode fallback")
 
+def get_llm_orchestrator():
+    """
+    Retourne l'instance de l'orchestrateur LLM.
+    
+    Returns:
+        L'instance LLMOrchestrator ou None si non disponible
+    """
+    return llm_orchestrator
+
 async def get_embeddings(text: str) -> List[float]:
     """
     Génère des embeddings pour un texte donné

@@ -60,14 +60,13 @@ except Exception as e:
     logger.critical(f"Exception non gérée lors de l'initialisation de ChromaDB: {str(e)}")
 
 # Inclusion des routeurs
-app.include_router(journal.router, prefix="/journal", tags=["Journal"])
-app.include_router(memoire.router, prefix="/memoire", tags=["Mémoire"])
-app.include_router(ai.router, prefix="/ai", tags=["IA"])
-app.include_router(search.router, prefix="/search", tags=["Recherche"])
-app.include_router(export.router, prefix="/export", tags=["Export"])
-app.include_router(admin.router, prefix="/admin", tags=["Admin"])
-# Inclusion du nouveau routeur avec préfixe "ai" pour conserver la cohérence
-app.include_router(hallucination.router, prefix="/ai", tags=["Hallucination"])
+app.include_router(journal, prefix="/journal", tags=["Journal"])
+app.include_router(memoire, prefix="/memoire", tags=["Mémoire"])
+app.include_router(ai, prefix="/ai", tags=["IA"])
+app.include_router(search, prefix="/search", tags=["Recherche"])
+app.include_router(export, prefix="/export", tags=["Export"])
+app.include_router(admin, prefix="/admin", tags=["Admin"])
+app.include_router(hallucination, prefix="/ai", tags=["Hallucination"])
 
 @app.get("/", tags=["Général"])
 async def root():

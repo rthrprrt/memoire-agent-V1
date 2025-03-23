@@ -303,21 +303,21 @@ class LLMOrchestrator:
             logger.error(f"Erreur lors du streaming: {str(e)}")
             yield f"Erreur: {str(e)}"
     
-   async def get_embeddings(self, text: str) -> List[float]:
-    """
-    Génère des embeddings en utilisant le modèle optimisé pour cette tâche.
-    """
-    try:
-        embedder = self.models["embedder"]["manager"]
-        return await embedder.get_embeddings(text)
-    except Exception as e:
-        logger.error(f"Erreur lors de la génération d'embeddings: {str(e)}")
-        # Fallback sur un autre modèle si le modèle d'embedding échoue
+    async def get_embeddings(self, text: str) -> List[float]:
+        """
+        Génère des embeddings en utilisant le modèle optimisé pour cette tâche.
+        """
         try:
-            return await self.models["orchestrator"]["manager"].get_embeddings(text)
-        except:
-            # Dernier recours: embedding local via sentence-transformers
-            return self._local_embedding_fallback(text)
+            embedder = self.models["embedder"]["manager"]
+            return await embedder.get_embeddings(text)
+        except Exception as e:
+            logger.error(f"Erreur lors de la génération d'embeddings: {str(e)}")
+            # Fallback sur un autre modèle si le modèle d'embedding échoue
+            try:
+                return await self.models["orchestrator"]["manager"].get_embeddings(text)
+            except:
+                # Dernier recours: embedding local via sentence-transformers
+                return self._local_embedding_fallback(text)
 
 
     def _local_embedding_fallback(self, text: str) -> List[float]:

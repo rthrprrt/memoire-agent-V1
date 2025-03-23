@@ -6,14 +6,13 @@ from datetime import datetime, timedelta
 import os
 import time
 import tempfile
-import os.path
 
 # Configuration de l'API
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
 
 # Configuration de Streamlit
 st.set_page_config(
-    page_title="Agent Mémoire Alternance",
+    page_title="Assistant Mémoire Alternance",
     page_icon="📝",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -91,18 +90,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- Fonctions d'appel à l'API avec gestion d'erreurs améliorée ---
+# --- Fonctions d'appel à l'API ---
 def api_request(method, endpoint, **kwargs):
-    """
-    Fonction améliorée pour les requêtes API avec gestion d'erreurs robuste
-    """
+    """Fonction pour les requêtes API avec gestion d'erreurs robuste"""
     max_retries = 3
     retry_delay = 1
     
     for retry in range(max_retries):
         try:
             url = f"{API_URL}/{endpoint}"
-            response = method(url, **kwargs, timeout=10)  # Ajouter un timeout explicite
+            response = method(url, **kwargs, timeout=10)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.ConnectionError:
@@ -145,7 +142,7 @@ def api_request(method, endpoint, **kwargs):
             st.error(f"Erreur inattendue: {str(e)}")
             return None
 
-# --- Fonctions existantes d'interrogation de l'API ---
+# --- Fonctions d'interrogation de l'API pour le journal ---
 def get_entreprises():
     result = api_request(requests.get, "entreprises")
     if result is None:
@@ -185,6 +182,13 @@ def delete_journal_entry(entry_id):
     result = api_request(requests.delete, f"journal/entries/{entry_id}")
     return result is not None
 
+def search_entries(query):
+    result = api_request(requests.get, "search", params={"query": query})
+    if result is None:
+        return []
+    return result
+
+# --- Fonctions d'interrogation de l'API pour le mémoire ---
 def get_memoire_sections(parent_id=None):
     params = {}
     if parent_id is not None:
@@ -207,6 +211,11 @@ def delete_memoire_section(section_id):
     result = api_request(requests.delete, f"memoire/sections/{section_id}")
     return result is not None
 
+def save_section_content(section_id, content):
+    data = {"content": content}
+    return api_request(requests.post, f"memoire/sections/{section_id}/save", json=data)
+
+# --- Fonctions d'interrogation de l'API pour l'IA ---
 def generate_plan(prompt):
     return api_request(requests.post, "ai/generate-plan", json={"prompt": prompt})
 
@@ -219,49 +228,56 @@ def generate_content(section_id, prompt=None):
 def improve_text(texte, mode):
     return api_request(requests.post, "ai/improve-text", json={"texte": texte, "mode": mode})
 
-def search_entries(query):
-    result = api_request(requests.get, "search", params={"query": query})
-    if result is None:
-        return []
-    return result
-
-# --- Nouvelles fonctions d'API pour la détection d'hallucinations ---
+# --- Fonctions d'API pour la détection d'hallucinations ---
 def verify_content(content, context=None):
-    """Vérifie si un contenu contient des hallucinations"""
     data = {"content": content}
     if context:
         data["context"] = context
     return api_request(requests.post, "ai/check-hallucinations", json=data)
 
 def improve_hallucinated_content(content, context=None):
-    """Améliore automatiquement un contenu contenant des hallucinations"""
     data = {"content": content}
     if context:
         data["context"] = context
     return api_request(requests.post, "ai/improve-content", json=data)
 
-# --- Fonctions pour les API existantes ---
+# --- Fonctions pour le streaming et autres ---
 def generate_content_streaming(section_id, prompt=None):
     data = {"section_id": section_id}
     if prompt:
         data["prompt"] = prompt
     try:
-        url = f"{API_URL}/ai/generate-content-stream"
-        with requests.post(url, json=data, stream=True, timeout=600) as response:
-            response.raise_for_status()
-            content_placeholder = st.empty()
-            content_text = ""
-            for line in response.iter_lines(decode_unicode=True):
-                if line:
-                    try:
-                        chunk = json.loads(line)
-                        if "response" in chunk:
-                            text_chunk = chunk["response"]
-                            content_text += text_chunk
-                            content_placeholder.text_area("Contenu généré en streaming", content_text, height=300)
-                    except json.JSONDecodeError:
-                        continue
-            return content_text
+        url = f"{API_URL}/ai/stream_generation"
+        import websocket
+        import json
+        
+        ws = websocket.create_connection(f"ws://{API_URL.replace('http://', '')}/ai/stream_generation")
+        ws.send(json.dumps(data))
+        
+        content_placeholder = st.empty()
+        content_text = ""
+        
+        while True:
+            try:
+                message = ws.recv()
+                data = json.loads(message)
+                
+                if data["type"] == "chunk":
+                    content_text += data["content"]
+                    content_placeholder.text_area("Contenu généré en streaming", content_text, height=300)
+                elif data["type"] == "end":
+                    break
+                elif data["type"] == "error":
+                    st.error(data["message"])
+                    break
+            except websocket.WebSocketConnectionClosedException:
+                break
+            except Exception as e:
+                st.error(f"Erreur lors du streaming: {str(e)}")
+                break
+        
+        ws.close()
+        return content_text
     except Exception as e:
         st.error(f"Erreur lors de la génération en streaming: {str(e)}")
         return None
@@ -277,30 +293,12 @@ def add_reference(ref_data):
 
 def export_memory(format="pdf"):
     try:
-        response = requests.post(f"{API_URL}/export", json={"format": format})
+        response = requests.post(f"{API_URL}/export/{format}")
         response.raise_for_status()
-        return response.content
+        return response.json()
     except Exception as e:
         st.error(f"Erreur lors de l'exportation: {str(e)}")
         return None
-
-def create_backup(description=None):
-    data = {}
-    if description:
-        data["description"] = description
-    return api_request(requests.post, "backup/create", json=data)
-
-def restore_backup(backup_id):
-    return api_request(requests.post, f"backup/restore/{backup_id}", json={})
-
-def get_embedding_cache_status():
-    return api_request(requests.get, "embeddings/cache-status")
-
-def clear_embedding_cache():
-    return api_request(requests.delete, "embeddings/cache-clear")
-
-def get_circuit_breaker_status():
-    return api_request(requests.get, "circuit-breaker/status")
 
 def analyze_pdf(uploaded_file):
     try:
@@ -325,9 +323,27 @@ def import_pdf(uploaded_file, entreprise_id=None):
         st.error(f"Erreur lors de l'import du PDF: {str(e)}")
         return None
 
-# --- Sidebar - Navigation ---
+def get_embedding_cache_status():
+    return api_request(requests.get, "admin/cache")
+
+def clear_embedding_cache():
+    return api_request(requests.post, "admin/cache/clear")
+
+def get_circuit_breaker_status():
+    return api_request(requests.get, "admin/health")
+
+def create_backup(description=None):
+    data = {}
+    if description:
+        data["description"] = description
+    return api_request(requests.post, "admin/backup/create", json=data)
+
+def restore_backup(backup_id):
+    return api_request(requests.post, f"admin/backup/{backup_id}/restore", json={"confirm": True})
+
+# --- Interface utilisateur ---
 with st.sidebar:
-    st.title("Agent Mémoire")
+    st.title("Assistant Mémoire")
     st.subheader("Navigation")
     page = st.radio("", ["Tableau de bord", "Journal de bord", "Éditeur de mémoire", "Chat assistant", "Import PDF", "Admin & Outils"])
 
@@ -350,7 +366,7 @@ if page == "Tableau de bord":
     with col3:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.subheader("Avancement global")
-        sections_with_content = sum(1 for s in sections if s.get("contenu"))
+        sections_with_content = sum(1 for s in sections if s.get("content"))
         progress = sections_with_content / max(len(sections), 1) * 100
         st.progress(progress / 100)
         st.metric("Pourcentage", f"{progress:.1f}%")
@@ -363,7 +379,7 @@ if page == "Tableau de bord":
             st.markdown(f"<p class='entry-date'>{entry['date']}</p>", unsafe_allow_html=True)
             tags_html = "".join(f"<span class='tag'>{tag}</span>" for tag in entry.get("tags", []))
             st.markdown(tags_html, unsafe_allow_html=True)
-            text_preview = entry["texte"][:200] + "..." if len(entry["texte"]) > 200 else entry["texte"]
+            text_preview = entry.get("content", "")[:200] + "..." if len(entry.get("content", "")) > 200 else entry.get("content", "")
             st.write(text_preview)
             st.markdown("</div>", unsafe_allow_html=True)
     else:
@@ -454,16 +470,31 @@ elif page == "Journal de bord":
                     st.markdown(f"<p class='entry-date'>{entry['date']}</p>", unsafe_allow_html=True)
                     tags_html = "".join(f"<span class='tag'>{tag}</span>" for tag in entry.get("tags", []))
                     st.markdown(tags_html, unsafe_allow_html=True)
-                    st.write(entry["texte"])
+                    st.write(entry.get("content", ""))
                     
                     col1, col2, col3 = st.columns([1, 1, 3])
+                    entry_id = entry['id']
                     with col1:
-                        if st.button(f"Modifier #{entry['id']}"):
-                            st.session_state['edit_entry'] = entry
+                        if st.button(f"Modifier #{entry_id}", key=f"edit_{entry_id}"):
+                            st.session_state[f'edit_entry_{entry_id}'] = entry
                     with col2:
-                        if st.button(f"Supprimer #{entry['id']}"):
-                            if delete_journal_entry(entry['id']):
-                                st.success(f"Entrée {entry['id']} supprimée")
+                        if st.button(f"Supprimer #{entry_id}", key=f"delete_{entry_id}"):
+                            if delete_journal_entry(entry_id):
+                                st.success(f"Entrée {entry_id} supprimée")
+                    
+                    # Afficher le formulaire d'édition si l'entrée est sélectionnée pour modification
+                    if f'edit_entry_{entry_id}' in st.session_state:
+                        with st.form(f"edit_entry_form_{entry_id}"):
+                            edit_texte = st.text_area(f"Modifier contenu #{entry_id}", entry.get("content", ""), height=200)
+                            edit_tags = st.text_input(f"Modifier tags #{entry_id}", ", ".join(entry.get("tags", [])))
+                            if st.form_submit_button("Enregistrer modifications"):
+                                update_data = {
+                                    "texte": edit_texte,
+                                    "tags": [tag.strip() for tag in edit_tags.split(",")]
+                                }
+                                if update_journal_entry(entry_id, update_data):
+                                    st.success(f"Entrée {entry_id} mise à jour")
+                                    del st.session_state[f'edit_entry_{entry_id}']
                     
                     st.markdown("</div>", unsafe_allow_html=True)
             else:
@@ -486,7 +517,7 @@ elif page == "Journal de bord":
                     
                     tags_html = "".join(f"<span class='tag'>{tag}</span>" for tag in result.get("tags", []))
                     st.markdown(tags_html, unsafe_allow_html=True)
-                    st.write(result["texte"])
+                    st.write(result.get("content", ""))
                     st.markdown("</div>", unsafe_allow_html=True)
             else:
                 st.info("Aucun résultat trouvé.")
@@ -494,18 +525,22 @@ elif page == "Journal de bord":
 elif page == "Éditeur de mémoire":
     st.markdown("<h1 class='main-title'>Éditeur de mémoire</h1>", unsafe_allow_html=True)
     
-    # Onglets modifiés pour inclure la vérification d'hallucinations
     tab1, tab2, tab3, tab4 = st.tabs(["Plan", "Édition des sections", "Vérification d'hallucinations", "Bibliographie"])
     
     with tab1:
         st.markdown("<h2 class='section-title'>Plan du mémoire</h2>", unsafe_allow_html=True)
-        if st.button("Générer un plan"):
-            prompt = st.text_area("Instructions pour la génération du plan (optionnel)", height=100)
-            with st.spinner("Génération du plan en cours..."):
-                result = generate_plan(prompt)
-                if result:
-                    st.success("Plan généré avec succès!")
-                    st.write(result["plan"])
+        
+        plan_col1, plan_col2 = st.columns(2)
+        with plan_col1:
+            if st.button("Générer un plan"):
+                with plan_col2:
+                    prompt = st.text_area("Instructions pour la génération du plan (optionnel)", height=100)
+                    if st.button("Confirmer génération"):
+                        with st.spinner("Génération du plan en cours..."):
+                            result = generate_plan(prompt)
+                            if result:
+                                st.success("Plan généré avec succès!")
+                                st.write(result.get("plan", ""))
         
         st.markdown("<h3 class='subsection-title'>Plan actuel</h3>", unsafe_allow_html=True)
         root_sections = get_memoire_sections()
@@ -523,7 +558,8 @@ elif page == "Éditeur de mémoire":
             with st.form("add_section_form"):
                 section_title = st.text_input("Titre de la section")
                 parent_sections = [("Aucun (section racine)", None)] + [(s['titre'], s['id']) for s in root_sections]
-                parent_id = st.selectbox("Section parente", parent_sections, format_func=lambda x: x[0])
+                parent_option = st.selectbox("Section parente", range(len(parent_sections)), format_func=lambda x: parent_sections[x][0])
+                parent_id = parent_sections[parent_option][1]
                 section_order = st.number_input("Ordre", min_value=0, value=0)
                 section_content = st.text_area("Contenu initial (optionnel)", height=100)
                 
@@ -531,9 +567,9 @@ elif page == "Éditeur de mémoire":
                     if section_title:
                         section_data = {
                             "titre": section_title,
-                            "parent_id": parent_id[1],  # Récupérer l'ID
+                            "content": section_content,
                             "ordre": section_order,
-                            "contenu": section_content
+                            "parent_id": parent_id
                         }
                         result = add_memoire_section(section_data)
                         if result:
@@ -553,49 +589,59 @@ elif page == "Éditeur de mémoire":
                 all_sections.append((f"--- {sub['titre']}", sub['id']))
         
         if all_sections:
-            selected_section = st.selectbox("Sélectionner une section à éditer", all_sections)
-            if selected_section:
-                section_id = selected_section[1]
-                section = get_memoire_section(section_id)
-                
-                if section:
-                    with st.form("edit_section_form"):
-                        edit_title = st.text_input("Titre", section['titre'])
-                        edit_content = st.text_area("Contenu", section.get('contenu', ''), height=400)
-                        
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            if st.form_submit_button("Enregistrer les modifications"):
-                                update_data = {
-                                    "titre": edit_title,
-                                    "contenu": edit_content
-                                }
-                                result = update_memoire_section(section_id, update_data)
-                                if result:
-                                    st.success("Section mise à jour avec succès!")
-                        
-                        with col2:
-                            if st.form_submit_button("Générer du contenu avec l'IA"):
-                                prompt = st.text_area("Instructions spécifiques pour l'IA (optionnel)", height=100)
-                                with st.spinner("Génération du contenu en cours..."):
-                                    result = generate_content(section_id, prompt)
-                                    if result:
-                                        st.success("Contenu généré avec succès!")
-                                        edit_content = result['generated_content']
-                                        st.text_area("Contenu généré", edit_content, height=400)
+            selected_section_index = st.selectbox("Sélectionner une section à éditer", 
+                                                  range(len(all_sections)), 
+                                                  format_func=lambda x: all_sections[x][0])
+            section_id = all_sections[selected_section_index][1]
+            section = get_memoire_section(section_id)
+            
+            if section:
+                with st.form("edit_section_form"):
+                    edit_title = st.text_input("Titre", section['titre'])
+                    edit_content = st.text_area("Contenu", section.get('content', ''), height=400)
                     
-                    # Afficher les entrées de journal associées
-                    if 'journal_entries' in section and section['journal_entries']:
-                        st.markdown("<h3 class='subsection-title'>Entrées de journal associées</h3>", unsafe_allow_html=True)
-                        for entry in section['journal_entries']:
-                            st.markdown(f"<div class='entry-container'>", unsafe_allow_html=True)
-                            st.markdown(f"<p class='entry-date'>{entry['date']}</p>", unsafe_allow_html=True)
-                            st.write(entry["content"][:200] + "..." if len(entry["content"]) > 200 else entry["content"])
-                            st.markdown("</div>", unsafe_allow_html=True)
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.form_submit_button("Enregistrer les modifications"):
+                            update_data = {
+                                "titre": edit_title,
+                                "content": edit_content
+                            }
+                            result = update_memoire_section(section_id, update_data)
+                            if result:
+                                st.success("Section mise à jour avec succès!")
+                    
+                    with col2:
+                        generate_content_button = st.form_submit_button("Générer du contenu avec l'IA")
+                
+                if generate_content_button:
+                    prompt = st.text_area("Instructions spécifiques pour l'IA (optionnel)", height=100)
+                    if st.button("Confirmer génération"):
+                        with st.spinner("Génération du contenu en cours..."):
+                            result = generate_content(section_id, prompt)
+                            if result:
+                                st.success("Contenu généré avec succès!")
+                                generated_content = result.get('content', '')
+                                st.text_area("Contenu généré", generated_content, height=400)
+                                if st.button("Utiliser ce contenu"):
+                                    update_data = {"content": generated_content}
+                                    update_result = update_memoire_section(section_id, update_data)
+                                    if update_result:
+                                        st.success("Section mise à jour avec le contenu généré!")
+                
+                # Afficher les entrées de journal associées
+                if 'journal_entries' in section and section['journal_entries']:
+                    st.markdown("<h3 class='subsection-title'>Entrées de journal associées</h3>", unsafe_allow_html=True)
+                    for entry in section['journal_entries']:
+                        st.markdown(f"<div class='entry-container'>", unsafe_allow_html=True)
+                        st.markdown(f"<p class='entry-date'>{entry.get('date', '')}</p>", unsafe_allow_html=True)
+                        content = entry.get("content", "")
+                        preview = content[:200] + "..." if len(content) > 200 else content
+                        st.write(preview)
+                        st.markdown("</div>", unsafe_allow_html=True)
         else:
             st.info("Aucune section disponible. Générez un plan ou ajoutez des sections manuellement.")
     
-    # Nouvel onglet pour la vérification d'hallucinations
     with tab3:
         st.markdown("<h2 class='section-title'>Vérification d'hallucinations</h2>", unsafe_allow_html=True)
         st.write("Cet outil détecte et corrige les affirmations potentiellement inexactes ou non vérifiables dans votre mémoire.")
@@ -617,11 +663,15 @@ elif page == "Éditeur de mémoire":
                     all_sections.append((f"--- {sub['titre']}", sub['id']))
             
             if all_sections:
-                selected_section = st.selectbox("Sélectionner une section à vérifier", all_sections, key="verify_section_select")
-                if selected_section:
-                    section = get_memoire_section(selected_section[1])
-                    if section and section.get('contenu'):
-                        content_to_verify = section.get('contenu', '')
+                selected_section_index = st.selectbox("Sélectionner une section à vérifier", 
+                                                    range(len(all_sections)), 
+                                                    format_func=lambda x: all_sections[x][0],
+                                                    key="verify_section_select")
+                if len(all_sections) > 0:
+                    section_id = all_sections[selected_section_index][1]
+                    section = get_memoire_section(section_id)
+                    if section and section.get('content'):
+                        content_to_verify = section.get('content', '')
                         st.text_area("Contenu de la section", content_to_verify, height=200)
                     else:
                         st.warning("Cette section ne contient pas de contenu à vérifier.")
@@ -673,8 +723,8 @@ elif page == "Éditeur de mémoire":
                             
                             # Option pour mettre à jour la section directement
                             if source_option == "Sélectionner une section existante" and st.button("Remplacer le contenu de la section par la version améliorée"):
-                                section_id = selected_section[1]
-                                update_data = {"contenu": improved_content}
+                                section_id = all_sections[selected_section_index][1]
+                                update_data = {"content": improved_content}
                                 update_result = update_memoire_section(section_id, update_data)
                                 if update_result:
                                     st.success("Section mise à jour avec le contenu amélioré!")
@@ -733,7 +783,8 @@ elif page == "Chat assistant":
     with col2:
         check_hallucinations = st.checkbox("Vérifier automatiquement les hallucinations", value=True)
     
-    section_id = st.text_input("ID de la section (optionnel)")
+    section_input = st.text_input("ID de la section (optionnel)")
+    section_id = section_input if section_input else None
     prompt = st.text_area("Votre prompt", "Entrez votre demande ici...", height=150)
     
     if st.button("Générer du contenu"):
@@ -755,15 +806,15 @@ elif page == "Chat assistant":
                         if st.button("Améliorer automatiquement le contenu"):
                             with st.spinner("Amélioration en cours..."):
                                 improved = improve_hallucinated_content(generated)
-                                if improved:
+                                if improved and "corrected_content" in improved:
                                     st.text_area("Contenu amélioré", improved["corrected_content"], height=300)
                     elif verification:
                         st.success("Aucune hallucination détectée dans le contenu généré.")
         else:
             with st.spinner("Génération en cours..."):
                 generated_result = generate_content(section_id, prompt)
-                if generated_result and "generated_content" in generated_result:
-                    generated = generated_result["generated_content"]
+                if generated_result and "content" in generated_result:
+                    generated = generated_result["content"]
                     st.text_area("Contenu généré", generated, height=300)
                     
                     # Vérification après génération si l'option est activée
@@ -779,7 +830,7 @@ elif page == "Chat assistant":
                                 if st.button("Améliorer automatiquement le contenu"):
                                     with st.spinner("Amélioration en cours..."):
                                         improved = improve_hallucinated_content(generated)
-                                        if improved:
+                                        if improved and "corrected_content" in improved:
                                             st.text_area("Contenu amélioré", improved["corrected_content"], height=300)
                             elif verification:
                                 st.success("Aucune hallucination détectée dans le contenu généré.")
@@ -843,53 +894,43 @@ elif page == "Admin & Outils":
         st.write("Circuit Breaker :", circuit_status)
     st.markdown("---")
     
-    # Références bibliographiques
-    st.subheader("Références Bibliographiques")
-    references = get_references()
-    if references:
-        df_refs = pd.DataFrame(references)
-        st.dataframe(df_refs)
-    with st.expander("Ajouter une nouvelle référence"):
-        ref_title = st.text_input("Titre")
-        ref_authors = st.text_input("Auteurs")
-        ref_year = st.number_input("Année", min_value=1900, max_value=datetime.now().year, step=1)
-        ref_publisher = st.text_input("Éditeur")
-        if st.button("Ajouter la référence"):
-            ref_data = {
-                "title": ref_title,
-                "authors": ref_authors,
-                "year": ref_year,
-                "publisher": ref_publisher
-            }
-            result = add_reference(ref_data)
-            if result:
-                st.success("Référence ajoutée avec succès.")
-    st.markdown("---")
-    
     # Export du mémoire
     st.subheader("Export du Mémoire")
     export_format = st.selectbox("Format d'export", ["pdf", "docx"])
     if st.button("Exporter"):
-        export_data = export_memory(export_format)
-        if export_data:
-            st.download_button(
-                label=f"Télécharger le mémoire au format {export_format.upper()}",
-                data=export_data,
-                file_name=f"memoire_export.{export_format}",
-                mime="application/pdf" if export_format == "pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            )
+        with st.spinner("Exportation en cours..."):
+            export_result = export_memory(export_format)
+            if export_result:
+                st.success(f"Export réussi")
+                st.json(export_result)
+                
+                if "download_url" in export_result:
+                    download_url = export_result["download_url"]
+                    full_url = f"{API_URL}/{download_url}"
+                    st.markdown(f"[Télécharger le mémoire]({full_url})")
     st.markdown("---")
     
     # Sauvegarde et restauration
     st.subheader("Sauvegarde et Restauration")
-    if st.button("Créer une sauvegarde"):
+    backup_col1, backup_col2 = st.columns(2)
+    
+    with backup_col1:
         description = st.text_input("Description de la sauvegarde", "Sauvegarde manuelle")
-        backup_result = create_backup(description)
-        if backup_result:
-            st.success("Sauvegarde créée avec succès.")
-    st.markdown("### Restaurer une sauvegarde")
-    backup_id = st.text_input("ID de la sauvegarde à restaurer")
-    if st.button("Restaurer la sauvegarde"):
-        restore_result = restore_backup(backup_id)
-        if restore_result:
-            st.success("Sauvegarde restaurée avec succès.")
+        if st.button("Créer une sauvegarde"):
+            with st.spinner("Création de la sauvegarde..."):
+                backup_result = create_backup(description)
+                if backup_result:
+                    st.success("Sauvegarde créée avec succès.")
+                    st.json(backup_result)
+    
+    with backup_col2:
+        backup_id = st.text_input("ID de la sauvegarde à restaurer")
+        if st.button("Restaurer la sauvegarde"):
+            if not backup_id:
+                st.error("Veuillez entrer un ID de sauvegarde valide.")
+            else:
+                with st.spinner("Restauration en cours..."):
+                    restore_result = restore_backup(backup_id)
+                    if restore_result:
+                        st.success("Sauvegarde restaurée avec succès.")
+                        st.json(restore_result)

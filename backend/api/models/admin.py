@@ -31,8 +31,9 @@ class Backup(BackupBase, TimestampedModel):
     size_mb: Optional[float] = None
     available: bool = True
 
-    class Config:
-        orm_mode = True
+    model_config = {
+        "from_attributes": True
+    }
 
 class BackupList(BaseModel):
     """Liste de sauvegardes"""
