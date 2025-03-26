@@ -1,16 +1,16 @@
-# Assistant de Rédaction de Mémoire Professionnel
+# Assistant de RÃ©daction de MÃ©moire Professionnel
 
-Ce projet est un assistant d'IA pour aider à la rédaction de mémoires professionnels, en offrant des fonctionnalités de gestion de journal de bord, organisation de sections, recherche sémantique et intégration avec des modèles de langage.
+Ce projet est un assistant d'IA pour aider Ã  la rÃ©daction de mÃ©moires professionnels, en offrant des fonctionnalitÃ©s de gestion de journal de bord, organisation de sections, recherche sÃ©mantique et intÃ©gration avec des modÃ¨les de langage.
 
 ## Configuration
 
 ### Variables d'environnement
 
-- `USE_DUMMY_LLM=true` : Active le mode simulé pour les LLM (quand Ollama n'est pas disponible)
-- `OLLAMA_HOST=http://localhost:11434` : URL d'Ollama (par défaut localhost:11434)
-- `OLLAMA_MODEL=mistral:7b` : Modèle LLM par défaut
+- `USE_DUMMY_LLM=true` : Active le mode simulÃ© pour les LLM (quand Ollama n'est pas disponible)
+- `OLLAMA_HOST=http://localhost:11434` : URL d'Ollama (par dÃ©faut localhost:11434)
+- `OLLAMA_MODEL=mistral:7b` : ModÃ¨le LLM par dÃ©faut
 
-## Démarrage de l'application
+## DÃ©marrage de l'application
 
 1. Backend:
 ```bash
@@ -21,16 +21,16 @@ python main.py
 2. Frontend:
 ```bash
 cd frontend
-python app.py
+streamlit run app.py
 ```
 
-## Résolution des problèmes
+## RÃ©solution des problÃ¨mes
 
-### Problème de thread SQLite
-Si vous rencontrez l'erreur "SQLite objects created in a thread can only be used in that same thread", le code a été modifié pour utiliser `check_same_thread=False`.
+### ProblÃ¨me de thread SQLite
+Si vous rencontrez l'erreur "SQLite objects created in a thread can only be used in that same thread", le code a Ã©tÃ© modifiÃ© pour utiliser `check_same_thread=False`.
 
 ### Tables manquantes
-Si vous rencontrez des erreurs "no such table", les définitions des tables manquantes ont été ajoutées au processus d'initialisation de la base de données.
+Si vous rencontrez des erreurs "no such table", les dÃ©finitions des tables manquantes ont Ã©tÃ© ajoutÃ©es au processus d'initialisation de la base de donnÃ©es.
 
 ### Erreurs 404
-Les erreurs 404 sont normales si vous n'avez pas encore ajouté de contenu (entrées de journal, sections de mémoire, etc.).
+Les erreurs 404 sont normales si vous n'avez pas encore ajoutÃ© de contenu (entrÃ©es de journal, sections de mÃ©moire, etc.).
