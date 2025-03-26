@@ -16,8 +16,9 @@ class Settings(BaseSettings):
     VECTOR_DB_PATH: str = os.getenv("VECTOR_DB_PATH", os.path.join(DB_PATH, "vectordb"))
     
     # LLM
-    OLLAMA_BASE_URL: str = os.getenv("OLLAMA_HOST", "http://ollama:11434")
+    OLLAMA_BASE_URL: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
     DEFAULT_MODEL: str = os.getenv("OLLAMA_MODEL", "mistral:7b")
+    USE_DUMMY_LLM: bool = os.getenv("USE_DUMMY_LLM", "true").lower() == "true"
     
     # API
     API_PORT: int = int(os.getenv("API_PORT", "8000"))

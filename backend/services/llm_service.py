@@ -6,17 +6,25 @@ import asyncio
 
 logger = logging.getLogger(__name__)
 
+# Import de la configuration
+from core.config import settings
+
 # Tentative d'importation de l'orchestrateur LLM existant
-try:
-    from llm_orchestrator import LLMOrchestrator
-    llm_orchestrator = LLMOrchestrator(
-        base_url=os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
-    )
-    ORCHESTRATOR_AVAILABLE = True
-except ImportError:
+if settings.USE_DUMMY_LLM:
     ORCHESTRATOR_AVAILABLE = False
     llm_orchestrator = None
-    logger.warning("LLMOrchestrator non disponible, utilisation du mode fallback")
+    logger.warning("Mode dummy LLM activé, utilisation du mode fallback")
+else:
+    try:
+        from llm_orchestrator import LLMOrchestrator
+        llm_orchestrator = LLMOrchestrator(
+            base_url=settings.OLLAMA_BASE_URL
+        )
+        ORCHESTRATOR_AVAILABLE = True
+    except ImportError:
+        ORCHESTRATOR_AVAILABLE = False
+        llm_orchestrator = None
+        logger.warning("LLMOrchestrator non disponible, utilisation du mode fallback")
 
 def get_llm_orchestrator():
     """

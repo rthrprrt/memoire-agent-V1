@@ -15,13 +15,13 @@ async def get_db_connection():
     def _get_connection():
         try:
             os.makedirs(os.path.dirname(settings.SQLITE_DB_PATH), exist_ok=True)
-            conn = sqlite3.connect(settings.SQLITE_DB_PATH)
+            conn = sqlite3.connect(settings.SQLITE_DB_PATH, check_same_thread=False)
             conn.row_factory = sqlite3.Row
             return conn
         except sqlite3.Error as e:
             logger.error(f"Erreur lors de la connexion à la base de données: {e}")
             # En cas d'erreur, on peut tenter une connexion en mémoire pour éviter un crash
-            conn = sqlite3.connect(":memory:")
+            conn = sqlite3.connect(":memory:", check_same_thread=False)
             conn.row_factory = sqlite3.Row
             return conn
     
@@ -38,7 +38,7 @@ def initialize_db(max_retries=5):
         try:
             logger.info(f"Initialisation de la base de données (tentative {retry+1}/{max_retries})...")
             os.makedirs(os.path.dirname(settings.SQLITE_DB_PATH), exist_ok=True)
-            conn = sqlite3.connect(settings.SQLITE_DB_PATH)
+            conn = sqlite3.connect(settings.SQLITE_DB_PATH, check_same_thread=False)
             cursor = conn.cursor()
             
             # Création des tables (schéma de base de données)
@@ -51,6 +51,64 @@ def initialize_db(max_retries=5):
                 description TEXT
             )
             ''')
+            
+            # Création de la table journal_entries
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS journal_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                texte TEXT NOT NULL,
+                entreprise_id INTEGER,
+                type_entree TEXT NOT NULL DEFAULT 'quotidien',
+                source_document TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (entreprise_id) REFERENCES entreprises (id)
+            )
+            ''')
+            
+            # Création de la table tags
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS tags (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nom TEXT NOT NULL UNIQUE
+            )
+            ''')
+            
+            # Création de la table d'association entry_tags
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS entry_tags (
+                entry_id INTEGER NOT NULL,
+                tag_id INTEGER NOT NULL,
+                PRIMARY KEY (entry_id, tag_id),
+                FOREIGN KEY (entry_id) REFERENCES journal_entries (id) ON DELETE CASCADE,
+                FOREIGN KEY (tag_id) REFERENCES tags (id)
+            )
+            ''')
+            
+            # Création de la table memoire_sections
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS memoire_sections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                titre TEXT NOT NULL,
+                contenu TEXT,
+                ordre INTEGER NOT NULL DEFAULT 0,
+                parent_id INTEGER,
+                derniere_modification TEXT NOT NULL,
+                FOREIGN KEY (parent_id) REFERENCES memoire_sections (id) ON DELETE SET NULL
+            )
+            ''')
+            
+            # Création de la table d'association section_entries
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS section_entries (
+                section_id INTEGER NOT NULL,
+                entry_id INTEGER NOT NULL,
+                PRIMARY KEY (section_id, entry_id),
+                FOREIGN KEY (section_id) REFERENCES memoire_sections (id) ON DELETE CASCADE,
+                FOREIGN KEY (entry_id) REFERENCES journal_entries (id) ON DELETE CASCADE
+            )
+            ''')
+            
             # ... (autres tables)
             
             # Vérifier si des entreprises par défaut doivent être ajoutées
