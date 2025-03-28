@@ -32,6 +32,12 @@ class EntrepriseBase(BaseModel):
     date_debut: datetime
     date_fin: Optional[datetime] = None
     description: Optional[str] = None
+    
+    model_config = {
+        "json_encoders": {
+            datetime: lambda dt: dt.strftime("%Y-%m-%d")
+        }
+    }
 
 class EntrepriseCreate(EntrepriseBase):
     """Modèle pour la création d'une entreprise"""
@@ -55,6 +61,27 @@ class JournalEntryBase(BaseModel):
     type_entree: Optional[str] = "quotidien"
     source_document: Optional[str] = None
     tags: Optional[List[constr(min_length=1, max_length=50)]] = None
+    
+    model_config = {
+        "json_encoders": {
+            datetime: lambda dt: dt.strftime("%Y-%m-%d")
+        }
+    }
+
+    @field_validator('date', mode='before')
+    def validate_date(cls, value):
+        """Convertit les dates au format YYYY-MM-DD en objets datetime."""
+        if isinstance(value, str):
+            try:
+                # Essayer le format ISO standard
+                return datetime.fromisoformat(value)
+            except ValueError:
+                try:
+                    # Essayer le format YYYY-MM-DD
+                    return datetime.strptime(value, "%Y-%m-%d")
+                except ValueError:
+                    raise ValueError(f"Le format de date '{value}' n'est pas valide. Utilisez un format ISO ou YYYY-MM-DD.")
+        return value
 
     @field_validator('texte')
     def texte_must_be_safe(cls, v):
@@ -111,7 +138,10 @@ class JournalEntry(BaseModel):
     tags: Optional[List[constr(min_length=1, max_length=50)]] = None
 
     model_config = {
-        "extra": "forbid"  # Interdire les champs supplémentaires non déclarés
+        "extra": "forbid",  # Interdire les champs supplémentaires non déclarés
+        "json_encoders": {
+            datetime: lambda dt: dt.strftime("%Y-%m-%d")
+        }
     }
 
     @field_validator('texte')

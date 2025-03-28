@@ -1,7 +1,7 @@
 # api/models/admin.py
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
 
 from api.models.base import TimestampedModel
 
@@ -67,3 +67,100 @@ class CacheStatus(BaseModel):
     size: int
     hit_rate: float
     items: Dict[str, Any]
+
+class RouteParameter(BaseModel):
+    """Paramètre d'une route API"""
+    name: str
+    type: str
+    required: bool = True
+    default: Optional[str] = None
+    kind: str = "query"  # query, path, body, etc.
+
+class RouteInfo(BaseModel):
+    """Informations de base sur une route API"""
+    path: str
+    name: str
+    methods: List[str]
+    tags: List[str] = []
+
+class RouteDetailedInfo(RouteInfo):
+    """Informations détaillées sur une route API"""
+    description: Optional[str] = None
+    parameters: List[RouteParameter] = []
+    response_model: Optional[str] = None
+    response_schema: Optional[Dict[str, Any]] = None
+
+class SystemInfoResponse(BaseModel):
+    """Réponse pour les informations système"""
+    datetime: str
+    os: str
+    python_version: str
+    cpu_count: int
+    memory: Dict[str, Any]
+    disk: Dict[str, Any]
+    environment: Dict[str, Any]
+    installed_packages: List[Dict[str, str]]
+    database: Optional[Dict[str, Any]] = None
+    database_error: Optional[str] = None
+
+class DatabaseColumn(BaseModel):
+    """Colonne d'une table de base de données"""
+    name: str
+    type: str
+    notnull: bool
+    dflt_value: Optional[str] = None
+    pk: bool
+
+class DatabaseIndex(BaseModel):
+    """Index d'une table de base de données"""
+    name: str
+    unique: bool
+    columns: List[str]
+
+class DatabaseForeignKey(BaseModel):
+    """Clé étrangère d'une table de base de données"""
+    id: int
+    seq: int
+    table: str
+    from_col: str = Field(..., alias="from")
+    to_col: str = Field(..., alias="to")
+    on_update: str
+    on_delete: str
+    match: str
+
+    model_config = {
+        "populate_by_name": True
+    }
+
+class DatabaseTable(BaseModel):
+    """Table de base de données"""
+    columns: List[DatabaseColumn]
+    indices: List[DatabaseIndex] = []
+    foreign_keys: List[DatabaseForeignKey] = []
+    row_count: Any
+
+class DatabaseStructure(RootModel):
+    """Structure de la base de données"""
+    root: Dict[str, DatabaseTable]
+    
+    # Pour maintenir la compatibilité avec le code existant
+    def __getitem__(self, item):
+        return self.root[item]
+    
+    def __iter__(self):
+        return iter(self.root)
+    
+    def items(self):
+        return self.root.items()
+
+class DatabaseQueryRequest(BaseModel):
+    """Requête pour exécuter une requête SQL"""
+    query: str
+    params: Optional[Dict[str, Any]] = None
+
+class DatabaseQueryResponse(BaseModel):
+    """Réponse d'une requête SQL"""
+    rows: List[Dict[str, Any]]
+    row_count: int
+    execution_time_ms: float
+    query: str

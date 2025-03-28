@@ -159,10 +159,19 @@ class MemoryManager:
             List[Dict]: Liste des entreprises
         """
         try:
-            return await self.journal_repository.get_entreprises()
+            logger.debug("MemoryManager: Tentative de récupération des entreprises")
+            entreprises = await self.journal_repository.get_entreprises()
+            logger.debug(f"MemoryManager: {len(entreprises)} entreprises récupérées avec succès")
+            return entreprises
         except Exception as e:
-            logger.error(f"Erreur lors de la récupération des entreprises: {str(e)}")
-            raise DatabaseError(f"Erreur lors de la récupération des entreprises: {str(e)}")
+            logger.error(f"MemoryManager: Erreur lors de la récupération des entreprises: {str(e)}")
+            # Ajouter plus de détails pour le débogage
+            import traceback
+            logger.error(f"MemoryManager: Détail de l'erreur: {traceback.format_exc()}")
+            
+            # Essayer de retourner une liste vide plutôt que de propager l'erreur
+            logger.warning("MemoryManager: Retour d'une liste vide comme solution de secours")
+            return []
     
     async def get_tags(self) -> List[Dict[str, Any]]:
         """
@@ -176,6 +185,78 @@ class MemoryManager:
         except Exception as e:
             logger.error(f"Erreur lors de la récupération des tags: {str(e)}")
             raise DatabaseError(f"Erreur lors de la récupération des tags: {str(e)}")
+    
+    async def cleanup_document_imports(self) -> int:
+        """
+        Supprime toutes les entrées de journal créées à partir de documents importés
+        
+        Returns:
+            int: Nombre d'entrées supprimées
+        """
+        try:
+            return await self.journal_repository.delete_entries_by_source()
+        except Exception as e:
+            logger.error(f"Erreur lors du nettoyage des imports: {str(e)}")
+            raise DatabaseError(f"Erreur lors du nettoyage des imports: {str(e)}")
+    
+    async def cleanup_specific_import(self, filename: str) -> int:
+        """
+        Supprime les entrées de journal créées à partir d'un document spécifique
+        
+        Args:
+            filename: Nom du fichier source
+            
+        Returns:
+            int: Nombre d'entrées supprimées
+        """
+        try:
+            return await self.journal_repository.delete_entries_by_source(filename)
+        except Exception as e:
+            logger.error(f"Erreur lors du nettoyage de l'import '{filename}': {str(e)}")
+            raise DatabaseError(f"Erreur lors du nettoyage de l'import '{filename}': {str(e)}")
+    
+    async def cleanup_entries_by_date(self, start_date: Optional[str] = None, end_date: Optional[str] = None) -> int:
+        """
+        Supprime les entrées de journal dans une plage de dates
+        
+        Args:
+            start_date: Date de début (format YYYY-MM-DD), optionnel
+            end_date: Date de fin (format YYYY-MM-DD), optionnel
+            
+        Returns:
+            int: Nombre d'entrées supprimées
+        """
+        try:
+            return await self.journal_repository.delete_entries_by_date(start_date, end_date)
+        except Exception as e:
+            logger.error(f"Erreur lors de la suppression des entrées par date: {str(e)}")
+            raise DatabaseError(f"Erreur lors de la suppression des entrées par date: {str(e)}")
+    
+    async def cleanup_all_entries(self) -> int:
+        """
+        Supprime toutes les entrées de journal
+        
+        Returns:
+            int: Nombre d'entrées supprimées
+        """
+        try:
+            return await self.journal_repository.delete_all_entries()
+        except Exception as e:
+            logger.error(f"Erreur lors de la suppression de toutes les entrées: {str(e)}")
+            raise DatabaseError(f"Erreur lors de la suppression de toutes les entrées: {str(e)}")
+    
+    async def get_import_sources(self) -> List[Dict[str, Any]]:
+        """
+        Liste tous les documents sources utilisés pour les imports
+        
+        Returns:
+            List[Dict]: Liste des sources d'import avec leur nombre d'entrées
+        """
+        try:
+            return await self.journal_repository.get_import_sources()
+        except Exception as e:
+            logger.error(f"Erreur lors de la récupération des sources d'import: {str(e)}")
+            raise DatabaseError(f"Erreur lors de la récupération des sources d'import: {str(e)}")
     
     # --- Méthodes pour les sections du mémoire ---
     

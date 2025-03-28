@@ -9,3 +9,5 @@ pdf2image==1.16.3
 python-docx==0.8.11
 docx2pdf==0.1.8
 streamlit-chat==0.1.1
+rich==13.6.0
+loguru==0.7.0

@@ -184,7 +184,7 @@ def initialize_vectordb(max_retries=5):
             else:
                 logger.warning("Impossible d'initialiser ChromaDB, utilisation du mode de secours...")
                 # Fallback sur une implémentation simulée
-                from utils.dummy_vectordb import create_dummy_collections
+                from core.dummy_vectordb import create_dummy_collections
                 chroma_client, journal_collection, sections_collection = create_dummy_collections()
                 return False
 
