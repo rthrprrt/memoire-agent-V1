@@ -1,0 +1,13 @@
+{
+  "history": [
+    {
+      "user": "read frontend/app.py",
+      "agent": "Erreur: Cl\u00e9 API DeepSeek non configur\u00e9e. Utilisez 'export DEEPSEEK_API_KEY=votre_cl\u00e9' ou configurez-la dans config.json"
+    }
+  ],
+  "project_context": {
+    "current_directory": "/mnt/c/Users/arthu/Desktop/memoire-agent",
+    "open_files": [],
+    "recent_errors": []
+  }
+}
