@@ -1,6 +1,7 @@
 from typing import Dict, Any, Optional, List, Union
 from datetime import datetime
 import json
+import uuid
 
 class BaseDBModel:
     """Modèle de base pour les objets de la base de données"""
@@ -161,3 +162,29 @@ class BibliographyReference(BaseDBModel):
             if self.accessed_date:
                 accessed_str = self.accessed_date.strftime('%d %B %Y') if isinstance(self.accessed_date, datetime) else self.accessed_date
                 self.citation += f" Consulté le {accessed_str}."
+                
+class MemoireGuideline(BaseDBModel):
+    """Modèle pour les règles et consignes du mémoire"""
+    
+    def __init__(self,
+                 id: str = None,
+                 titre: str = "",
+                 contenu: str = "",
+                 source_document: Optional[str] = None,
+                 created_at: Union[str, datetime] = None,
+                 last_modified: Union[str, datetime] = None,
+                 is_active: bool = True,
+                 order: int = 0,
+                 category: str = "general",
+                 metadata: Dict[str, Any] = None,
+                 **kwargs):
+        self.id = id or str(uuid.uuid4())
+        self.titre = titre
+        self.contenu = contenu
+        self.source_document = source_document
+        self.created_at = created_at if isinstance(created_at, datetime) else self.parse_datetime(created_at)
+        self.last_modified = last_modified if isinstance(last_modified, datetime) else self.parse_datetime(last_modified)
+        self.is_active = is_active
+        self.order = order
+        self.category = category
+        self.metadata = metadata or {}

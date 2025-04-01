@@ -149,23 +149,55 @@ def initialize_vectordb(max_retries=5):
     """Initialisation robuste de ChromaDB avec gestion des erreurs et réessais"""
     global chroma_client, journal_collection, sections_collection
     
+    # Si USE_DUMMY_VECTORDB est activé, utiliser directement le mode de secours
+    if settings.USE_DUMMY_VECTORDB:
+        logger.warning("Mode de secours ChromaDB forcé via la configuration.")
+        from core.dummy_vectordb import create_dummy_collections
+        chroma_client, journal_collection, sections_collection = create_dummy_collections()
+        return False
+    
     for retry in range(max_retries):
         try:
             logger.info(f"Initialisation de ChromaDB (tentative {retry+1}/{max_retries})...")
-            os.makedirs(settings.VECTOR_DB_PATH, exist_ok=True)
+            
+            # Vérifier si le répertoire existe et est accessible en écriture
+            try:
+                os.makedirs(settings.VECTOR_DB_PATH, exist_ok=True)
+                # Vérifier les droits d'accès
+                test_file_path = os.path.join(settings.VECTOR_DB_PATH, "test_write.tmp")
+                with open(test_file_path, 'w') as f:
+                    f.write("test")
+                os.remove(test_file_path)
+                logger.info(f"Répertoire ChromaDB accessible en écriture: {settings.VECTOR_DB_PATH}")
+            except (PermissionError, OSError) as e:
+                logger.error(f"Problème d'accès au répertoire ChromaDB: {str(e)}")
+                raise Exception(f"Problème d'accès au répertoire ChromaDB: {str(e)}")
             
             # Nouvelle configuration recommandée pour ChromaDB
-            chroma_client = chromadb.PersistentClient(
-                path=settings.VECTOR_DB_PATH
-            )
+            try:
+                chroma_client = chromadb.PersistentClient(
+                    path=settings.VECTOR_DB_PATH
+                )
+                logger.info("Client ChromaDB créé avec succès.")
+            except ImportError:
+                logger.error("Module chromadb non installé. Veuillez l'installer avec: pip install chromadb")
+                raise Exception("Module chromadb non installé")
+            except Exception as e:
+                logger.error(f"Erreur lors de la création du client ChromaDB: {str(e)}")
+                raise e
             
             # Création ou récupération des collections
             try:
                 journal_collection = chroma_client.get_collection("journal_entries")
                 logger.info("Collection ChromaDB 'journal_entries' récupérée.")
-            except Exception:
-                journal_collection = chroma_client.create_collection("journal_entries")
-                logger.info("Collection ChromaDB 'journal_entries' créée.")
+            except Exception as e:
+                logger.warning(f"Erreur lors de la récupération de la collection 'journal_entries': {str(e)}")
+                try:
+                    journal_collection = chroma_client.create_collection("journal_entries")
+                    logger.info("Collection ChromaDB 'journal_entries' créée.")
+                except Exception as e2:
+                    logger.error(f"Erreur lors de la création de la collection 'journal_entries': {str(e2)}")
+                    raise e2
             
             try:
                 sections_collection = chroma_client.get_collection("memoire_sections")
@@ -192,12 +224,24 @@ def get_journal_collection():
     """Récupère la collection journal_entries de ChromaDB"""
     global journal_collection
     if journal_collection is None:
-        initialize_vectordb()
+        try:
+            initialize_vectordb()
+        except Exception as e:
+            # En cas d'erreur, créer une collection de secours
+            from core.dummy_vectordb import create_dummy_collections
+            _, journal_collection, _ = create_dummy_collections()
+            logger.warning(f"Utilisation d'une collection de secours suite à une erreur: {str(e)}")
     return journal_collection
 
 def get_sections_collection():
     """Récupère la collection memoire_sections de ChromaDB"""
     global sections_collection
     if sections_collection is None:
-        initialize_vectordb()
+        try:
+            initialize_vectordb()
+        except Exception as e:
+            # En cas d'erreur, créer une collection de secours
+            from core.dummy_vectordb import create_dummy_collections
+            _, _, sections_collection = create_dummy_collections()
+            logger.warning(f"Utilisation d'une collection de secours suite à une erreur: {str(e)}")
     return sections_collection

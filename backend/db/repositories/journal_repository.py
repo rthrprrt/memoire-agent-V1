@@ -906,3 +906,4 @@ class JournalRepository:
             raise DatabaseError(f"Erreur lors de la suppression de toutes les entrées: {str(e)}")
         finally:
             conn.close()
+            

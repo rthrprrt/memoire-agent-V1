@@ -9,18 +9,35 @@ logger = logging.getLogger(__name__)
 # Import de la configuration
 from core.config import settings
 
-# Tentative d'importation de l'orchestrateur LLM existant
+# Initialisation des services LLM
 if settings.USE_DUMMY_LLM:
+    # Mode dummy - pas de service LLM réel
     ORCHESTRATOR_AVAILABLE = False
     llm_orchestrator = None
     logger.warning("Mode dummy LLM activé, utilisation du mode fallback")
+elif settings.USE_DEEPSEEK and settings.DEEPSEEK_API_KEY:
+    # Mode Deepseek
+    try:
+        from deepseek_orchestrator import DeepseekOrchestrator
+        llm_orchestrator = DeepseekOrchestrator(
+            api_key=settings.DEEPSEEK_API_KEY,
+            base_url=settings.DEEPSEEK_BASE_URL
+        )
+        ORCHESTRATOR_AVAILABLE = True
+        logger.info("Service LLM initialisé avec l'API Deepseek")
+    except ImportError as e:
+        ORCHESTRATOR_AVAILABLE = False
+        llm_orchestrator = None
+        logger.error(f"Erreur lors de l'initialisation de DeepseekOrchestrator: {str(e)}")
 else:
+    # Mode Ollama (fallback)
     try:
         from llm_orchestrator import LLMOrchestrator
         llm_orchestrator = LLMOrchestrator(
             base_url=settings.OLLAMA_BASE_URL
         )
         ORCHESTRATOR_AVAILABLE = True
+        logger.info("Service LLM initialisé avec Ollama")
     except ImportError:
         ORCHESTRATOR_AVAILABLE = False
         llm_orchestrator = None
@@ -31,7 +48,7 @@ def get_llm_orchestrator():
     Retourne l'instance de l'orchestrateur LLM.
     
     Returns:
-        L'instance LLMOrchestrator ou None si non disponible
+        L'instance LLMOrchestrator/DeepseekOrchestrator ou None si non disponible
     """
     return llm_orchestrator
 
@@ -60,7 +77,7 @@ async def get_embeddings(text: str) -> List[float]:
     logger.warning("Utilisation du fallback pour les embeddings (vecteur aléatoire)")
     return generate_random_embedding(text)
 
-def generate_random_embedding(text: str = None, dimension: int = 384) -> List[float]:
+def generate_random_embedding(text: str = None, dimension: int = 1536) -> List[float]:
     """
     Génère un embedding aléatoire
     

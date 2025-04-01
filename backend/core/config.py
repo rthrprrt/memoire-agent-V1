@@ -14,11 +14,16 @@ class Settings(BaseSettings):
     DB_PATH: str = os.getenv("DB_PATH", "data")
     SQLITE_DB_PATH: str = os.getenv("SQLITE_DB_PATH", os.path.join(DB_PATH, "memoire.db"))
     VECTOR_DB_PATH: str = os.getenv("VECTOR_DB_PATH", os.path.join(DB_PATH, "vectordb"))
+    # Forcer l'utilisation du mode sans ChromaDB en cas de problème
+    USE_DUMMY_VECTORDB: bool = os.getenv("USE_DUMMY_VECTORDB", "true").lower() == "true"
     
     # LLM
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+    DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "sk-c6513222ef3649c496863e035c77a3dd")
+    DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+    USE_DEEPSEEK: bool = os.getenv("USE_DEEPSEEK", "true").lower() == "true"
     DEFAULT_MODEL: str = os.getenv("OLLAMA_MODEL", "mistral:7b")
-    USE_DUMMY_LLM: bool = os.getenv("USE_DUMMY_LLM", "true").lower() == "true"
+    USE_DUMMY_LLM: bool = os.getenv("USE_DUMMY_LLM", "false").lower() == "true"
     
     # API
     API_PORT: int = int(os.getenv("API_PORT", "8000"))

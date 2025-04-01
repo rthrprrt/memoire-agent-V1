@@ -4,21 +4,118 @@ Ce projet est un assistant d'IA pour aider à la rédaction de mémoires profess
 
 ## Architecture et Responsabilités
 
-### Structure du Projet
+### Structure Détaillée du Projet
 
 ```
 memoire-agent/
-├── backend/               # Serveur API FastAPI
-│   ├── api/               # Définitions API (routes, modèles)
-│   ├── core/              # Configuration et services centraux
-│   ├── db/                # Modèles et accès base de données
-│   ├── services/          # Services métier
-│   └── utils/             # Utilitaires
-├── frontend/              # Interface utilisateur Streamlit
-│   ├── app.py             # Point d'entrée de l'interface
-│   └── utils/             # Utilitaires frontend
-├── backups/               # Sauvegardes automatiques
-└── logs/                  # Journaux d'application
+├── backend/                     # Serveur API FastAPI
+│   ├── api/                     # Définitions API (routes, modèles)
+│   │   ├── dependencies.py      # Dépendances FastAPI
+│   │   ├── hallucination.py     # Fonctions pour la détection d'hallucinations
+│   │   ├── models/              # Modèles Pydantic pour API
+│   │   │   ├── admin.py         # Modèles admin et maintenance
+│   │   │   ├── ai.py            # Modèles pour l'IA et génération
+│   │   │   ├── base.py          # Modèles de base partagés
+│   │   │   ├── export.py        # Modèles d'exportation
+│   │   │   ├── hallucination.py # Modèles détection d'hallucinations
+│   │   │   ├── journal.py       # Modèles pour journal de bord
+│   │   │   └── memoire.py       # Modèles pour sections du mémoire
+│   │   ├── routes/              # Endpoints API
+│   │   │   ├── admin.py         # Routes administratives
+│   │   │   ├── ai.py            # Routes IA et génération
+│   │   │   ├── export.py        # Routes d'exportation
+│   │   │   ├── hallucination.py # Routes détection d'hallucinations
+│   │   │   ├── journal.py       # Routes pour journal de bord
+│   │   │   ├── memoire.py       # Routes pour le mémoire
+│   │   │   └── search.py        # Routes de recherche
+│   │   └── utils/               # Utilitaires API
+│   │       └── text_analysis.py # Analyse des textes API
+│   ├── core/                    # Composants centraux
+│   │   ├── config.py            # Configuration application
+│   │   ├── dummy_vectordb.py    # Fallback ChromaDB
+│   │   ├── exceptions.py        # Exceptions personnalisées
+│   │   ├── logging.py           # Configuration logs centrale
+│   │   ├── logging_config.py    # Configuration logs avancée
+│   │   └── memory_manager.py    # Gestion de la mémoire vectorielle
+│   ├── data/                    # Données persistantes
+│   │   ├── memoire.db           # Base de données SQLite
+│   │   └── vectordb/            # Données vectorielles (ChromaDB)
+│   ├── db/                      # Couche d'accès aux données
+│   │   ├── database.py          # Gestionnaire de connexion BD
+│   │   ├── models/              # Modèles de données
+│   │   │   └── db_models.py     # Définitions des modèles SQL
+│   │   └── repositories/        # Repositories (pattern DAO)
+│   │       ├── guidelines_repository.py # Repository pour consignes
+│   │       ├── journal_repository.py    # Repository pour journal
+│   │       └── memoire_repository.py    # Repository pour mémoire
+│   ├── deepseek_orchestrator.py # Intégration DeepSeek API
+│   ├── diagnose_ollama.py       # Diagnostic de l'API Ollama
+│   ├── hallucination_detector.py # Détection d'hallucinations
+│   ├── llm_orchestrator.py      # Orchestrateur d'interactions LLM
+│   ├── logs/                    # Journaux application backend
+│   ├── main.py                  # Point d'entrée principal FastAPI
+│   ├── requirements.txt         # Dépendances backend
+│   ├── scripts/                 # Scripts utilitaires
+│   │   ├── init.sh              # Initialisation environnement
+│   │   └── run_tests.sh         # Exécution des tests
+│   ├── services/                # Services métier
+│   │   ├── export_service.py    # Service d'exportation
+│   │   ├── llm_service.py       # Service IA/LLM
+│   │   ├── memory_manager.py    # Gestionnaire mémoire
+│   │   └── memory_service.py    # Service mémoire
+│   ├── tests/                   # Tests automatisés
+│   │   ├── conftest.py          # Configuration de test
+│   │   ├── test_api/            # Tests des API
+│   │   ├── test_db/             # Tests de la base de données
+│   │   ├── test_services/       # Tests des services
+│   │   └── test_utils/          # Tests des utilitaires
+│   └── utils/                   # Utilitaires Backend
+│       ├── circuit_breaker.py   # Protection contre pannes
+│       ├── pdf_extractor.py     # Extraction de texte PDF/DOCX
+│       ├── text_analysis.py     # Analyse textuelle
+│       └── text_processing.py   # Traitement de texte
+├── frontend/                    # Interface utilisateur Streamlit
+│   ├── app.py                   # Application Streamlit principale
+│   ├── data/                    # Données frontend
+│   ├── logs/                    # Journaux frontend
+│   ├── requirements.txt         # Dépendances frontend
+│   └── utils/                   # Utilitaires frontend
+│       └── logging_config.py    # Configuration logging frontend
+├── backups/                     # Sauvegardes automatiques
+├── contexts/                    # Contextes de conversation
+├── deepseek_api_doc/            # Documentation API DeepSeek
+├── docker-compose.yml           # Configuration Docker
+├── logs/                        # Journaux principaux
+├── poetry.lock                  # Verrouillage des versions (poetry)
+├── pyproject.toml               # Configuration du projet
+└── pytest.ini                   # Configuration des tests pytest
+```
+
+### Flux de Données et Interactions
+
+```mermaid
+graph TD
+    subgraph Frontend
+        A[app.py] -->|API Requests| B[Backend API]
+    end
+    
+    subgraph Backend
+        B -->|Routes| C[API Routes]
+        C -->|Modèles| D[Repositories]
+        D -->|CRUD| E[Database]
+        
+        C -->|Requêtes LLM| F[LLM Service]
+        F -->|Requêtes| G[Ollama/DeepSeek]
+        
+        C -->|Extraction| H[PDF/DOCX Extract]
+        H -->|Texte| I[Text Analysis]
+        I -->|Tags| D
+        
+        C -->|Search| J[Memory Manager]
+        J -->|Vector Search| K[ChromaDB]
+    end
+    
+    E -->|Backup| L[Backup Manager]
 ```
 
 ### Composants Principaux
@@ -26,6 +123,10 @@ memoire-agent/
 #### Backend
 
 - **main.py**: Point d'entrée du serveur backend FastAPI
+  - Initialise l'API, la base de données et les routes
+  - Configure le middleware CORS
+  - Expose les endpoints principaux
+
 - **api/routes/**: Définition des endpoints API
   - **journal.py**: Routes pour la gestion du journal de bord
   - **memoire.py**: Routes pour la gestion du mémoire
@@ -35,24 +136,19 @@ memoire-agent/
   - **hallucination.py**: Routes pour la détection d'hallucinations
   - **admin.py**: Routes administratives (cleanup, maintenance)
 
-- **api/models/**: Schémas Pydantic pour validation des requêtes/réponses
-  - Chaque fichier correspond aux modèles des routes correspondantes
-
-- **db/models/db_models.py**: Définitions des modèles SQLAlchemy
-  - Tables pour le journal, le mémoire, les tags, etc.
-
-- **db/repositories/**: Accès aux données
+- **db/repositories/**: Accès aux données (pattern Repository)
   - **journal_repository.py**: Opérations CRUD pour entrées journal
   - **memoire_repository.py**: Opérations CRUD pour sections mémoire
+  - **guidelines_repository.py**: Opérations pour les consignes du mémoire
 
 - **services/**: Logique métier
   - **memory_service.py**: Service de gestion des entrées et sections
-  - **llm_service.py**: Service d'intégration avec modèles LLM (via Ollama)
+  - **llm_service.py**: Service d'intégration avec modèles LLM
   - **export_service.py**: Génération de documents exportables
 
 - **utils/**: Fonctions utilitaires
   - **text_processing.py**: Traitement de texte et NLP
-  - **pdf_extractor.py**: Extraction de contenu depuis PDFs
+  - **pdf_extractor.py**: Extraction de contenu depuis PDFs/DOCXs
     - Responsable de l'extraction de dates et tags
   - **text_analysis.py**: Analyse de texte (extraction d'entités, etc.)
   - **circuit_breaker.py**: Protection contre les pannes externes
@@ -64,14 +160,30 @@ memoire-agent/
   - Gère l'affichage du tableau de bord, journal, mémoire
   - Coordonne les interactions avec l'API backend
 
-- **utils/logging_config.py**: Configuration de logging pour frontend
+### Mécanismes Clés et Flux de Travail
 
-### Mécanismes Clés
+1. **Importation de Documents**:
+   - L'utilisateur télécharge un document PDF/DOCX via l'interface Streamlit
+   - Le frontend envoie le fichier à l'API backend (POST /journal/import/document)
+   - `pdf_extractor.py` traite le document pour extraire:
+     - Texte (via PyPDF2/pdfminer.six pour PDFs, python-docx pour DOCX)
+     - Date (extraction intelligente du nom de fichier ou contenu)
+     - Tags (analyse du contenu via `text_analysis.py`)
+   - Les entrées extraites sont enregistrées dans la base de données SQLite
+   - Les données sont également indexées dans ChromaDB pour recherche vectorielle
 
-- **Extraction de dates et tags**: Le système extrait intelligemment les dates à partir des noms de fichiers ou du contenu lors de l'importation de documents (backend/utils/pdf_extractor.py)
-- **Base de données vectorielle**: Permet la recherche sémantique (backend/core/memory_manager.py)
-- **Intégration LLM**: Communication avec Ollama pour génération de texte (backend/services/llm_service.py)
-- **Système de backup**: Sauvegarde automatique des données et sessions (backend/backup_manager.py)
+2. **Génération de contenu**:
+   - L'utilisateur demande la génération de contenu pour une section
+   - L'API communique avec le service LLM (Ollama ou DeepSeek)
+   - Les entrées pertinentes sont extraites comme contexte
+   - Le LLM génère du contenu basé sur ce contexte
+   - Le contenu est vérifié pour les hallucinations
+   - Le résultat est enregistré dans la base de données
+
+3. **Système de Backup**:
+   - Sauvegarde automatique des données et sessions
+   - Protection contre la perte de données
+   - Possibilité de restaurer des versions précédentes
 
 ## Configuration
 
