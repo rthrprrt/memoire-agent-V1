@@ -12,6 +12,7 @@ env/
 venv/
 ENV/
 
+
 # Logs et bases de données
 *.log
 *.sqlite
@@ -22,3 +23,6 @@ Thumbs.db
 
 # Dossiers Docker
 .docker/
+
+# Dossiers et fichiers spécifiques à DeepSeek
+.deepseek_api_doc/
