@@ -118,6 +118,108 @@ graph TD
     E -->|Backup| L[Backup Manager]
 ```
 
+### Version détaillée
+
+```mermaid
+graph TD
+    subgraph "🌐 Interface Utilisateur"
+        A[Streamlit Frontend<br/>app.py] --> B[API Gateway<br/>FastAPI]
+        A1[Pages UI<br/>📊 Dashboard<br/>📝 Journal<br/>📚 Mémoire<br/>🔍 Recherche] --> A
+    end
+    
+    subgraph "🚀 Couche API"
+        B --> C[Routes API]
+        C --> C1[journal.py<br/>Gestion Journal]
+        C --> C2[memoire.py<br/>Gestion Mémoire]
+        C --> C3[search.py<br/>Recherche Sémantique]
+        C --> C4[ai.py<br/>Génération IA]
+        C --> C5[export.py<br/>Export Documents]
+    end
+    
+    subgraph "🧠 Services Métier"
+        D[Memory Manager<br/>Orchestration Centrale]
+        E[LLM Service<br/>Gestion IA]
+        F[Export Service<br/>Génération Docs]
+        
+        C1 --> D
+        C2 --> D
+        C3 --> D
+        C4 --> E
+        C5 --> F
+    end
+    
+    subgraph "🤖 Moteurs IA"
+        G[LLM Orchestrator<br/>Multi-Modèles]
+        H[Deepseek API<br/>Cloud LLM]
+        I[Ollama Local<br/>llama3:8b, mistral:7b]
+        J[Hallucination Detector<br/>Validation Contenu]
+        
+        E --> G
+        G --> H
+        G --> I
+        E --> J
+    end
+    
+    subgraph "💾 Couche Persistance"
+        K[Repository Layer<br/>Pattern DAO]
+        L[SQLite Database<br/>memoire.db]
+        M[ChromaDB Vector Store<br/>Embeddings & Search]
+        N[File System<br/>PDF/DOCX Storage]
+        
+        D --> K
+        K --> K1[Journal Repository]
+        K --> K2[Mémoire Repository]
+        K --> K3[Guidelines Repository]
+        K1 --> L
+        K2 --> L
+        K3 --> L
+        D --> M
+        F --> N
+    end
+    
+    subgraph "🔧 Utilitaires"
+        O[Text Processing<br/>NLP & Analysis]
+        P[PDF/DOCX Extractor<br/>Document Parser]
+        Q[Circuit Breaker<br/>Fault Tolerance]
+        R[Logging System<br/>Rich + Loguru]
+        
+        E --> O
+        D --> P
+        E --> Q
+        B --> R
+    end
+    
+    subgraph "🐳 Infrastructure"
+        S[Docker Compose<br/>Orchestration]
+        T[Backup Service<br/>Automatic Backups]
+        U[Health Checks<br/>Service Monitoring]
+        
+        S --> T
+        S --> U
+    end
+    
+    subgraph "📊 Flux de Données"
+        V[Document Upload] --> P
+        P --> W[Text Extraction]
+        W --> O
+        O --> X[Tag & Date Analysis]
+        X --> L
+        X --> M
+        M --> Y[Semantic Search]
+        Y --> Z[Context Retrieval]
+        Z --> E
+    end
+    
+    style A fill:#e3f2fd
+    style G fill:#ff9800
+    style E fill:#ff9800
+    style L fill:#2196f3
+    style M fill:#9c27b0
+    style D fill:#4caf50
+    style B fill:#f44336
+    style S fill:#607d8b
+```
+
 ### Composants Principaux
 
 #### Backend
